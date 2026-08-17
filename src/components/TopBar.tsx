@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Bell, User, LayoutGrid, Search } from 'lucide-react';
+import { Clock, Bell, User, LayoutGrid, Search, Settings } from 'lucide-react';
 
-export function TopBar() {
+interface TopBarProps {
+  onOpenSettings: () => void;
+}
+
+export function TopBar({ onOpenSettings }: TopBarProps) {
   const [time, setTime] = useState(new Date());
   const [profile, setProfile] = useState<{name: string, avatar: string}>({ name: '', avatar: '' });
 
@@ -57,6 +61,15 @@ export function TopBar() {
         <button className="relative w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 border border-white/10 hover:bg-purple-900/30 hover:border-purple-500/30 text-slate-300 hover:text-purple-300 transition-all">
           <Bell size={18} />
           <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-[#120D1D]"></span>
+        </button>
+
+        {/* Settings */}
+        <button
+          onClick={onOpenSettings}
+          className="relative w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 border border-white/10 hover:bg-purple-900/30 hover:border-purple-500/30 text-slate-300 hover:text-purple-300 transition-all"
+          aria-label="Open Settings"
+        >
+          <Settings size={18} />
         </button>
 
         {/* Profile */}

@@ -1,30 +1,30 @@
 import { ProcessedImage } from '../types';
 
 export function createTranslationDoc(images: ProcessedImage[]): string {
-  let doc = `====================== ⚠️ تعليمات هامة للمترجمين ⚠️ ======================
-1. هذا الملف مخصص لترجمة النصوص وتسهيل عملك ببرامج الترجمة الخارجية.
-2. قم بكتابة الترجمة المطلوبة دائماً أسفل كلمة "الترجمة:" مباشرةً فقط.
-3. يحظر تماماً تغيير أو مسح السطور التي تبدأ بـ [ID:] لأنها ضرورية لتعرف النظام على المربع.
-4. حافظ على وجود السطر الذي يحتوي على [END] بعد نهاية ترجمة كل نص ولا تقم بمسحه أبدا (يعبر عن نهاية المربع النصي).
-5. يمكنك بكل حرية استخدام أكثر من سطر (Enter) في الترجمة داخل المربع الواحد.
-6. في نهاية هذا الملف يوجد قسم يحمل اسم "بيانات التحرير والاحداثيات". الرجاء عدم لمسه أو حذفه أبداً!
+  let doc = `====================== ⚠️ Important Instructions for Translators ⚠️ ======================
+1. This file is meant for translating the text and making your work easier with external translation tools.
+2. Always write the requested translation directly below the word "Translation:" only.
+3. It is strictly forbidden to change or delete the lines starting with [ID:] because they are required for the system to identify the box.
+4. Keep the line containing [END] after the end of each text's translation and never delete it (it marks the end of the text box).
+5. You are free to use more than one line (Enter) in the translation within a single box.
+6. At the end of this file there is a section called "Editing and Coordinates Data". Please do not touch or delete it!
 =========================================================================\n\n`;
 
   images.forEach(img => {
     if (img.regions.length === 0) return;
     doc += `------------------------------------------------------------\n`;
-    doc += `📄 الصفحة: ${img.filename}\n`;
+    doc += `📄 Page: ${img.filename}\n`;
     doc += `------------------------------------------------------------\n\n`;
     img.regions.forEach((r, idx) => {
       doc += `[ID: ${r.id}]\n`;
-      doc += `💬 النوع: ${r.type === 'bubble' ? 'فقاعة حوار' : 'مؤثر صوتي (SFX)'} | رقم النص: ${idx + 1}\n`;
-      doc += `🇯🇵 النص الأصلي:\n${r.originalText || '(فارغ)'}\n\n`;
-      doc += `الترجمة:\n${r.translatedText || ''}\n`;
+      doc += `💬 Type: ${r.type === 'bubble' ? 'Dialogue Bubble' : 'Sound Effect (SFX)'} | Text Number: ${idx + 1}\n`;
+      doc += `🇯🇵 Original Text:\n${r.originalText || '(empty)'}\n\n`;
+      doc += `Translation:\n${r.translatedText || ''}\n`;
       doc += `[END]\n\n`;
     });
   });
 
-  doc += `============== بيانات التحرير والاحداثيات (لا تلمس هذا الجزء) ==============\n`;
+  doc += `============== Editing and Coordinates Data (do not touch this part) ==============\n`;
   const metadata = images.map(img => ({
     id: img.id,
     filename: img.filename,
@@ -45,9 +45,9 @@ export function createTranslationDoc(images: ProcessedImage[]): string {
 
 export function parseTranslationDoc(docText: string, currentImages: ProcessedImage[]): ProcessedImage[] {
   const translations: Record<string, string> = {};
-  
+
   // Extract texts based on ID and [END]
-  const regex = /\[ID:\s*([a-zA-Z0-9-]+)\][\s\S]*?الترجمة:\n([\s\S]*?)\n(?:\[END\])/g;
+  const regex = /\[ID:\s*([a-zA-Z0-9-]+)\][\s\S]*?Translation:\n([\s\S]*?)\n(?:\[END\])/g;
   let match;
   while ((match = regex.exec(docText)) !== null) {
      const id = match[1];

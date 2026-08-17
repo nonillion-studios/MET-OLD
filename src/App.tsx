@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, Suspense } from 'react';
-import { Upload, Download, Play, Save, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, PenTool, ZoomIn, ZoomOut, Maximize, Palette, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Key, Sparkles, Scissors, Undo, Wand2, Settings, LayoutGrid } from 'lucide-react';
+import { Upload, Download, Play, Save, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, PenTool, ZoomIn, ZoomOut, Maximize, Palette, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Key, Sparkles, Scissors, Undo, Wand2, Settings, X } from 'lucide-react';
 import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingleImage } from './lib/zip';
 import { processMangaPages, generateInpaint, RawRegion } from './lib/gemini';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
@@ -10,9 +10,7 @@ import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
-import { CloudStorage } from './components/CloudStorage';
 import { TopBar } from './components/TopBar';
-import { FloatingMusicPlayer } from './components/FloatingMusicPlayer';
 
 const ImageEditor = React.lazy(() => import('./components/ImageEditor').then(m => ({ default: m.ImageEditor })));
 
@@ -50,41 +48,6 @@ export default function App() {
     get('mangas_library').then((saved) => {
       if (saved && Array.isArray(saved) && saved.length > 0) {
         setMangas(saved);
-      } else {
-        // Fallback or migration from previous legacy session
-        get('manga_project').then((legacyImages) => {
-          if (legacyImages && Array.isArray(legacyImages) && legacyImages.length > 0) {
-            const defaultManga: MangaSeries = {
-              id: 'legacy-manga-' + Math.random().toString(36).substr(2, 9),
-              title: 'Solo Leveling (Cleaned)',
-              type: 'manhwa',
-              coverUrl: '', // auto beautiful gradient
-              description: 'Imported from previous workspace session.',
-              volumes: [
-                {
-                  id: 'legacy-volume-1',
-                  name: 'Volume 1',
-                  chapters: [
-                    {
-                      id: 'legacy-chapter-1',
-                      name: 'Chapter 1',
-                      images: legacyImages
-                    }
-                  ]
-                }
-              ]
-            };
-            setMangas([defaultManga]);
-            set('mangas_library', [defaultManga]).catch(console.error);
-            
-            // Auto open the chapter
-            setActiveMangaId(defaultManga.id);
-            setActiveVolumeId('legacy-volume-1');
-            setActiveChapterId('legacy-chapter-1');
-            setImages(legacyImages);
-            setSelectedImageId(legacyImages[0].id);
-          }
-        }).catch(console.error);
       }
     }).catch(console.error);
   }, []);
@@ -143,7 +106,8 @@ export default function App() {
   const fontInputRef = useRef<HTMLInputElement>(null);
 
   const [appInitializing, setAppInitializing] = useState(true);
-  const [activeNavigationTab, setActiveNavigationTab] = useState<'library' | 'cloud' | 'scheduler' | 'settings'>('library');
+  const [activeNavigationTab] = useState<'library'>('library');
+  const [showSettingsPage, setShowSettingsPage] = useState(false);
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
 
   useEffect(() => {
@@ -340,8 +304,8 @@ export default function App() {
     if (!selectedImageId) {
       Swal.fire({
         icon: 'warning',
-        title: 'تنبيه',
-        text: 'برجاء فتح صفحة واحدة أولاً والوقوف عليها داخل الاستوديو لتطبيق الTranslation.',
+        title: 'Notice',
+        text: 'Please open a single page and select it in the studio first to apply the translation.',
         background: '#090615',
         color: '#ffffff',
         confirmButtonColor: '#7c3aed'
@@ -356,8 +320,8 @@ export default function App() {
       if (!cleanData) {
         Swal.fire({
           icon: 'error',
-          title: 'حقل Empty',
-          text: 'برجاء لصق الكود (مصفوفة الـ JSON) المسترجع من الذكاء الاصطناعي أولاً.',
+          title: 'Empty Field',
+          text: 'Please paste the code (JSON array) retrieved from the AI first.',
           background: '#090615',
           color: '#ffffff',
           confirmButtonColor: '#7c3aed'
@@ -422,8 +386,8 @@ export default function App() {
 
       Swal.fire({
         icon: 'success',
-        title: 'تم دمج الTranslation الخارجية بSuccess!',
-        text: `تم التعرف واسترداد عدد ${newRegions.length} فقاعات حوارية وتطبيقها بذكاء مع توسيط الTextوص.`,
+        title: 'External translation merged successfully!',
+        text: `Recognized and recovered ${newRegions.length} dialogue bubbles and applied them intelligently with centered text.`,
         confirmButtonColor: '#7c3aed',
         background: '#090615',
         color: '#ffffff'
@@ -432,8 +396,8 @@ export default function App() {
       console.error(err);
       Swal.fire({
         icon: 'error',
-        title: 'صيغة غير صالحة',
-        text: 'فشل تحليل الText المنسوخ كقائمة مدخلات Translation صالحة. تأكد من ثبات قائمة الـ JSON المسترجعة.',
+        title: 'Invalid Format',
+        text: 'Failed to parse the pasted text as a valid list of translation entries. Make sure the retrieved JSON array is valid.',
         confirmButtonColor: '#7c3aed',
         background: '#090615',
         color: '#ffffff'
@@ -447,7 +411,7 @@ export default function App() {
     
     Swal.fire({
       title: 'Loading and parsing fonts...',
-      text: 'الرجاء الانتظار الحين معالجة ملفات الخطوط',
+      text: 'Please wait while the font files are being processed',
       allowOutsideClick: false,
       didOpen: () => {
         Swal.showLoading();
@@ -493,9 +457,9 @@ export default function App() {
         setCustomFonts(prev => [...prev, ...loadedFonts]);
         Swal.fire({
           icon: 'success',
-          title: 'تم تفعيل الخطوط المخصصة!',
-          text: `تم استخراج وLoading ${loadedFonts.length} من الخطوط بSuccess داخل الاستوديو.`,
-          confirmButtonText: 'رائع',
+          title: 'Custom fonts activated!',
+          text: `Extracted and loaded ${loadedFonts.length} fonts successfully into the studio.`,
+          confirmButtonText: 'Great',
           confirmButtonColor: '#7c3aed',
           background: '#090615',
           color: '#ffffff'
@@ -503,8 +467,8 @@ export default function App() {
       } else {
         Swal.fire({
           icon: 'error',
-          title: 'Error في معالجة الملف',
-          text: 'لم يتم العثور على خطوط صالحة (TTF/OTF) داخل الملف المرفوع.',
+          title: 'Error Processing File',
+          text: 'No valid fonts (TTF/OTF) were found inside the uploaded file.',
           confirmButtonColor: '#7c3aed',
           background: '#090615',
           color: '#ffffff'
@@ -514,8 +478,8 @@ export default function App() {
       console.error(err);
       Swal.fire({
         icon: 'error',
-        title: 'فشل تثبيت الخطوط',
-        text: 'حدث Error غير متوقع أثناء تفكيك وقراءة ملفات الخط.',
+        title: 'Failed to Install Fonts',
+        text: 'An unexpected error occurred while extracting and reading the font files.',
         confirmButtonColor: '#7c3aed',
         background: '#090615',
         color: '#ffffff'
@@ -548,7 +512,7 @@ export default function App() {
         id: id1,
         width: halfW,
         originalText: region.originalText ? region.originalText.substring(0, Math.floor(region.originalText.length / 2)) : '',
-        translatedText: region.translatedText ? region.translatedText.substring(0, Math.floor(region.translatedText.length / 2)) : 'الفقاعة الأولى',
+        translatedText: region.translatedText ? region.translatedText.substring(0, Math.floor(region.translatedText.length / 2)) : 'First Bubble',
       };
       region2 = {
         ...region,
@@ -556,7 +520,7 @@ export default function App() {
         x: region.x + halfW,
         width: halfW,
         originalText: region.originalText ? region.originalText.substring(Math.floor(region.originalText.length / 2)) : '',
-        translatedText: region.translatedText ? region.translatedText.substring(Math.floor(region.translatedText.length / 2)) : 'الفقاعة الثانية',
+        translatedText: region.translatedText ? region.translatedText.substring(Math.floor(region.translatedText.length / 2)) : 'Second Bubble',
       };
     } else {
       const halfH = region.height / 2;
@@ -565,7 +529,7 @@ export default function App() {
         id: id1,
         height: halfH,
         originalText: region.originalText ? region.originalText.substring(0, Math.floor(region.originalText.length / 2)) : '',
-        translatedText: region.translatedText ? region.translatedText.substring(0, Math.floor(region.translatedText.length / 2)) : 'الفقاعة العلوية',
+        translatedText: region.translatedText ? region.translatedText.substring(0, Math.floor(region.translatedText.length / 2)) : 'Top Bubble',
       };
       region2 = {
         ...region,
@@ -573,7 +537,7 @@ export default function App() {
         y: region.y + halfH,
         height: halfH,
         originalText: region.originalText ? region.originalText.substring(Math.floor(region.originalText.length / 2)) : '',
-        translatedText: region.translatedText ? region.translatedText.substring(Math.floor(region.translatedText.length / 2)) : 'الفقاعة السفلية',
+        translatedText: region.translatedText ? region.translatedText.substring(Math.floor(region.translatedText.length / 2)) : 'Bottom Bubble',
       };
     }
 
@@ -610,8 +574,8 @@ export default function App() {
 
     Swal.fire({
       icon: 'success',
-      title: 'تم فصل الفقاعتين!',
-      text: 'تم فصل الفقاعة المستهدفة بذكاء لفقاعتين مستقلتين مواءمتين للمحاذاة.',
+      title: 'Bubbles separated!',
+      text: 'The target bubble was intelligently split into two independent, aligned bubbles.',
       timer: 1500,
       showConfirmButton: false,
       background: '#090615',
@@ -666,8 +630,8 @@ export default function App() {
 
     Swal.fire({
       icon: 'success',
-      title: 'تم ضبط كشيدة الTextوص!',
-      text: style === 'oval' ? 'تم تطبيق كشيدة التدريج البيضاوي لملائمة الدوائر.' : 'تم استعادة التنسيق المستطيل القياسي.',
+      title: 'Text kashida adjusted!',
+      text: style === 'oval' ? 'Applied oval-gradient kashida to fit circular bubbles.' : 'Restored the standard rectangular formatting.',
       timer: 1200,
       showConfirmButton: false,
       background: '#090615',
@@ -677,12 +641,12 @@ export default function App() {
 
   const handleExportPsd = async () => {
     if (images.length === 0) {
-      Swal.fire('Error', 'برجاء Loading Images الفصل للExport.', 'error');
+      Swal.fire('Error', 'Please load the chapter images before exporting.', 'error');
       return;
     }
 
     Swal.fire({
-      title: 'توليد ملفات Photoshop PSD...',
+      title: 'Generating Photoshop PSD files...',
       text: 'Packing layers, transparent texts, and repainted art into a PSD-compatible workspace...',
       allowOutsideClick: false,
       didOpen: () => {
@@ -751,16 +715,16 @@ export default function App() {
 
       Swal.fire({
         icon: 'success',
-        title: 'تم Export حزمة طبقات PSD بSuccess!',
-        text: 'تم تسليمك ملف ZIP يضم الطبقات مفصولة بالكامل، خطوط الTextوص الشفافة المستقلة، والتصميم الجمالي الجاهز للمتابعة داخل فوتوشوب دقة عالية.',
-        confirmButtonText: 'ممتاز',
+        title: 'PSD layer package exported successfully!',
+        text: 'You have received a ZIP file containing fully separated layers, independent transparent text layers, and high-resolution artwork ready to continue in Photoshop.',
+        confirmButtonText: 'Excellent',
         confirmButtonColor: '#7c3aed',
         background: '#090615',
         color: '#ffffff'
       });
     } catch (err) {
       console.error(err);
-      Swal.fire('Error في الExport', 'تعذر كتابة ملف PSD الExportي.', 'error');
+      Swal.fire('Export Error', 'Failed to write the exported PSD file.', 'error');
     }
   };
 
@@ -806,7 +770,7 @@ export default function App() {
           textAlign: 'center',
           lineHeight: 1.3,
           originalText: 'Scribble Detected Area',
-          translatedText: 'Text الفقاعة الجديد',
+          translatedText: 'New bubble text',
           autoFitText: true
         };
 
@@ -843,8 +807,8 @@ export default function App() {
         
         Swal.fire({
           icon: 'success',
-          title: 'حدود محاذاة ذكية!',
-          text: 'تم رصد واحتواء فقاعة الحوار تلقائياً بدلالة الشخبطة وتوسيط الText.',
+          title: 'Smart alignment bounds!',
+          text: 'The dialogue bubble was automatically detected and contained from the scribble, with text centered.',
           timer: 1500,
           showConfirmButton: false,
           background: '#090615',
@@ -853,8 +817,8 @@ export default function App() {
       } else {
         Swal.fire({
           icon: 'warning',
-          title: 'تنبيه',
-          text: 'تعذر التعرف التلقائي على حدود الفقاعة من نقطة الشخبطة. يرجى تجربة الشخبطة بمنتصف الفقاعة تماماً.',
+          title: 'Notice',
+          text: 'Could not automatically detect the bubble bounds from the scribble point. Please try scribbling right in the center of the bubble.',
           confirmButtonColor: '#7c3aed',
           background: '#090615',
           color: '#ffffff'
@@ -1048,7 +1012,7 @@ export default function App() {
 
   const handleSmartBubbleFill = async (imgId: string, region: Region) => {
     if (region.type === 'sfx') {
-      alert("خوارزمية التعرف الذكي على الفقاعات مخصصة للفقاعات فقط وتتجاهل المؤثرات الصوتية (SFX).");
+      alert("The smart bubble-detection algorithm is designed for bubbles only and ignores sound effects (SFX).");
       return;
     }
     const img = images.find(i => i.id === imgId);
@@ -1082,7 +1046,7 @@ export default function App() {
         textAlign: 'center'
       });
     } else {
-      alert("تعذر التعرف التلقائي على حدود الفقاعة.");
+      alert("Could not automatically detect the bubble bounds.");
     }
   };
 
@@ -1597,7 +1561,7 @@ export default function App() {
       setShowBubblePreviews(true);
     } catch (e) {
       console.error(e);
-      alert("تعذر تشغيل المعاينة التلقائية للفقاعات.");
+      alert("Could not run the automatic bubble preview.");
     } finally {
       setIsGeneratingPreviews(false);
     }
@@ -1844,11 +1808,11 @@ export default function App() {
 
   const handleDeleteManga = (mangaId: string) => {
     Swal.fire({
-      title: 'هل ترغب بDelete هذه المانجا كلياً من Library؟',
-      text: "سيؤدي هذا الإجراء لDelete كافة الVolumeات والفصول والصفحات المTranslation نهائياً ولا يمكن الBack فيه!",
+      title: 'Delete this manga entirely from your library?',
+      text: "This action will permanently delete all volumes, chapters, and translated pages, and cannot be undone!",
       icon: 'warning',
       showCancelButton: true,
-      confirmButtonText: 'نعم، اDelete السلسلة',
+      confirmButtonText: 'Yes, delete the series',
       cancelButtonText: 'Cancel',
       confirmButtonColor: '#dc2626',
       cancelButtonColor: '#374151',
@@ -1864,7 +1828,7 @@ export default function App() {
         }
         Swal.fire({
           icon: 'success',
-          text: 'تم Delete سلسلة المانجا بSuccess!',
+          text: 'The manga series was deleted successfully!',
           confirmButtonColor: '#7c3aed',
           background: '#120b24',
           color: '#f8fafc'
@@ -1875,11 +1839,11 @@ export default function App() {
 
   const handleDeleteVolume = (volId: string) => {
     Swal.fire({
-      title: 'هل تريد Delete هذا الVolume وجسد فصوله؟',
-      text: "سيتم Delete الVolume بكافة الفصول الموجودة بداخله نهائياً!",
+      title: 'Delete this volume and all its chapters?',
+      text: "This volume and all the chapters inside it will be permanently deleted!",
       icon: 'warning',
       showCancelButton: true,
-      confirmButtonText: 'نعم، اDeleteه',
+      confirmButtonText: 'Yes, delete it',
       cancelButtonText: 'Cancel',
       confirmButtonColor: '#dc2626',
       cancelButtonColor: '#374151',
@@ -1900,7 +1864,7 @@ export default function App() {
         }
         Swal.fire({
           icon: 'success',
-          text: 'تم Delete الVolume بSuccess!',
+          text: 'The volume was deleted successfully!',
           confirmButtonColor: '#7c3aed',
           background: '#120b24',
           color: '#f8fafc'
@@ -1911,11 +1875,11 @@ export default function App() {
 
   const handleDeleteChapter = (chapId: string) => {
     Swal.fire({
-      title: 'هل تريد Delete هذا الChapter كلياً؟',
-      text: "سيؤدي هذا لDelete كافة الImages المغروسة والEditات المطبقة نهائياً!",
+      title: 'Delete this chapter entirely?',
+      text: "This will permanently delete all embedded images and applied edits!",
       icon: 'warning',
       showCancelButton: true,
-      confirmButtonText: 'نعم، اDeleteه',
+      confirmButtonText: 'Yes, delete it',
       cancelButtonText: 'Cancel',
       confirmButtonColor: '#dc2626',
       cancelButtonColor: '#374151',
@@ -1942,7 +1906,7 @@ export default function App() {
         }
         Swal.fire({
           icon: 'success',
-          text: 'تم Delete الChapter المترجم بSuccess!',
+          text: 'The translated chapter was deleted successfully!',
           confirmButtonColor: '#7c3aed',
           background: '#120b24',
           color: '#f8fafc'
@@ -1953,19 +1917,19 @@ export default function App() {
 
   const handleAddVolumePrompt = () => {
     Swal.fire({
-      title: 'Add Volume جديد (New Volume)',
-      text: 'أدخل اسم الVolume أو رقمه الترتيبي للتصنيف:',
+      title: 'Add New Volume',
+      text: 'Enter the volume name or its sequence number for classification:',
       input: 'text',
-      inputPlaceholder: 'مثلا: Volume 20 أو Volume 1...',
+      inputPlaceholder: 'e.g.: Volume 20 or Volume 1...',
       showCancelButton: true,
-      confirmButtonText: 'Add الVolume',
+      confirmButtonText: 'Add Volume',
       cancelButtonText: 'Cancel',
       confirmButtonColor: '#7c3aed',
       background: '#120b24',
       color: '#f8fafc',
       inputValidator: (value) => {
         if (!value) {
-          return 'يجب كتابة اسم الVolume!';
+          return 'You must enter a volume name!';
         }
         return null;
       }
@@ -1986,7 +1950,7 @@ export default function App() {
         }));
         Swal.fire({
           icon: 'success',
-          text: `تمت Add الVolume ${value} بSuccess!`,
+          text: `Volume ${value} added successfully!`,
           confirmButtonColor: '#7c3aed',
           background: '#120b24',
           color: '#f8fafc'
@@ -1997,19 +1961,19 @@ export default function App() {
 
   const handleAddChapterPrompt = () => {
     Swal.fire({
-      title: 'Add Chapter جديد (New Chapter)',
-      text: 'أدخل رقم الفصل أو اسم الجزء لحساب الTranslation:',
+      title: 'Add New Chapter',
+      text: 'Enter the chapter number or part name for translation:',
       input: 'text',
-      inputPlaceholder: 'مثلا: Chapter 150 أو الفصل الأول...',
+      inputPlaceholder: 'e.g.: Chapter 150 or Chapter 1...',
       showCancelButton: true,
-      confirmButtonText: 'إنشاء الفصل',
+      confirmButtonText: 'Create Chapter',
       cancelButtonText: 'Cancel',
       confirmButtonColor: '#7c3aed',
       background: '#120b24',
       color: '#f8fafc',
       inputValidator: (value) => {
         if (!value) {
-          return 'يجب كتابة اسم الفصل!';
+          return 'You must enter a chapter name!';
         }
         return null;
       }
@@ -2047,7 +2011,7 @@ export default function App() {
       if (file.size > 2 * 1024 * 1024) {
         Swal.fire({
           icon: 'warning',
-          text: 'يرجى اختيار Imagesة بحجم أصغر من 2 ميجابايت لضمان سرعة الأداء.',
+          text: 'Please choose an image smaller than 2 MB to keep performance fast.',
           confirmButtonColor: '#7c3aed',
           background: '#120b24',
           color: '#f8fafc'
@@ -2068,7 +2032,7 @@ export default function App() {
     if (!newSeriesTitle.trim()) {
       Swal.fire({
         icon: 'error',
-        text: 'يجب كتابة عنوان المانجا/المانهوا للبدء!',
+        text: 'You must enter a manga/manhwa title to get started!',
         confirmButtonColor: '#7c3aed',
         background: '#120b24',
         color: '#f8fafc'
@@ -2081,7 +2045,7 @@ export default function App() {
       title: newSeriesTitle.trim(),
       type: newSeriesType,
       coverUrl: newSeriesCoverUrl || '', 
-      description: newSeriesDesc.trim() || 'لا يوجد وصف مخصص لهذه السلسلة.',
+      description: newSeriesDesc.trim() || 'No custom description for this series.',
       volumes: []
     };
 
@@ -2096,188 +2060,7 @@ export default function App() {
 
     Swal.fire({
       icon: 'success',
-      text: 'تمت Add السلسلة الجديدة لمكتبتك بSuccess! انقر عليها الآن لإنشاء الVolumeات والفصول.',
-      confirmButtonColor: '#7c3aed',
-      background: '#120b24',
-      color: '#f8fafc'
-    });
-  };
-
-  const loadDemoProject = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 800;
-    canvas.height = 1200;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-       // Canvas background
-       ctx.fillStyle = '#f3f4f6';
-       ctx.fillRect(0, 0, 800, 1200);
-       
-       // Panel borders
-       ctx.strokeStyle = '#111827';
-       ctx.lineWidth = 6;
-       ctx.strokeRect(30, 30, 740, 340);
-       ctx.strokeRect(30, 400, 350, 760);
-       ctx.strokeRect(410, 400, 360, 760);
-       
-       // Decorative manga speedlines background
-       ctx.strokeStyle = '#d1d5db';
-       ctx.lineWidth = 1.5;
-       for (let i = 0; i < 20; i++) {
-         ctx.beginPath();
-         ctx.moveTo(35 + i * 18, 35);
-         ctx.lineTo(210 + i * 8, 365);
-         ctx.stroke();
-       }
-       
-       // Draw dialogue bubble outline 1
-       ctx.fillStyle = '#ffffff';
-       ctx.strokeStyle = '#000000';
-       ctx.lineWidth = 4;
-       ctx.beginPath();
-       ctx.ellipse(200, 150, 90, 60, 0, 0, Math.PI * 2);
-       ctx.fill();
-       ctx.stroke();
-       // tail
-       ctx.beginPath();
-       ctx.moveTo(170, 200);
-       ctx.lineTo(150, 250);
-       ctx.lineTo(210, 195);
-       ctx.fillStyle = '#ffffff';
-       ctx.fill();
-       ctx.stroke();
-       ctx.beginPath();
-       ctx.moveTo(171, 198);
-       ctx.lineTo(209, 193);
-       ctx.strokeStyle = '#ffffff';
-       ctx.lineWidth = 6;
-       ctx.stroke();
-       
-       // Draw dialogue bubble outline 2
-       ctx.fillStyle = '#ffffff';
-       ctx.strokeStyle = '#000000';
-       ctx.lineWidth = 4;
-       ctx.beginPath();
-       ctx.ellipse(580, 700, 100, 70, 0, 0, Math.PI * 2);
-       ctx.fill();
-       ctx.stroke();
-       // tail
-       ctx.beginPath();
-       ctx.moveTo(550, 755);
-       ctx.lineTo(530, 810);
-       ctx.lineTo(590, 750);
-       ctx.fillStyle = '#ffffff';
-       ctx.fill();
-       ctx.stroke();
-       ctx.beginPath();
-       ctx.moveTo(551, 753);
-       ctx.lineTo(589, 748);
-       ctx.strokeStyle = '#ffffff';
-       ctx.lineWidth = 6;
-       ctx.stroke();
-    }
-    const dataUrl = canvas.toDataURL();
-    
-    // Seed high precision mock boxes to make it immediately interactive
-    const demoRegions: Region[] = [
-      {
-        id: "demo-bubble-1",
-        type: "bubble",
-        originalText: "本当に？マンガ翻訳AIがついに完成したのか？！",
-        translatedText: "Really? The manga translation AI is finally complete?!",
-        x: 120,
-        y: 110,
-        width: 160,
-        height: 80,
-        angle: 0,
-        textColor: "#000000",
-        strokeColor: "transparent",
-        strokeWidth: 2,
-        bgColor: "transparent",
-        fontFamily: "Inter",
-        fontSize: 16,
-        fontWeight: "600",
-        fontStyle: "normal",
-        textAlign: "center",
-        lineHeight: 1.3
-      },
-      {
-        id: "demo-bubble-2",
-        type: "bubble",
-        originalText: "ええ、素晴らしい流動ガラスのUIを備えています！",
-        translatedText: "Yes, featuring a gorgeous liquid glass UI edition!",
-        x: 495,
-        y: 650,
-        width: 170,
-        height: 100,
-        angle: 0,
-        textColor: "#000000",
-        strokeColor: "transparent",
-        strokeWidth: 2,
-        bgColor: "transparent",
-        fontFamily: "Inter",
-        fontSize: 16,
-        fontWeight: "650",
-        fontStyle: "normal",
-        textAlign: "center",
-        lineHeight: 1.3
-      }
-    ];
-
-    const demoImage: ProcessedImage = {
-       id: "demo-project-ch1",
-       filename: "demo_manga_page_01.png",
-       dataUrl,
-       mimeType: "image/png",
-       regions: demoRegions,
-       paintStrokes: [],
-       status: "done",
-       width: 800,
-       height: 1200
-    };
-
-    const demoMangaId = 'demo-manga-150';
-    const demoVolumeId = 'demo-volume-20';
-    const demoChapterId = 'demo-chapter-150';
-
-    const newDemoManga: MangaSeries = {
-      id: demoMangaId,
-      title: 'Solo Leveling (Demo)',
-      type: 'manhwa',
-      coverUrl: '', // Auto colorful dark gradient
-      description: 'The legendary webtoon Solo Leveling loaded with pre-segmented dialogues, custom fonts and automated OCR regions.',
-      volumes: [
-        {
-          id: demoVolumeId,
-          name: 'Volume 20',
-          chapters: [
-            {
-              id: demoChapterId,
-              name: 'Chapter 150',
-              images: [demoImage]
-            }
-          ]
-        }
-      ]
-    };
-
-    setMangas(prev => {
-      const exists = prev.some(m => m.id === demoMangaId);
-      if (exists) {
-        return prev.map(m => m.id === demoMangaId ? newDemoManga : m);
-      }
-      return [...prev, newDemoManga];
-    });
-
-    setActiveMangaId(demoMangaId);
-    setActiveVolumeId(demoVolumeId);
-    setActiveChapterId(demoChapterId);
-    setImages([demoImage]);
-    setSelectedImageId(demoImage.id);
-    setActiveNavigationTab('library');
-    Swal.fire({
-      icon: 'success',
-      text: 'Interactive sample demo project loaded! Select individual speech bubbles to translate, realign, or change fonts.',
+      text: 'The new series was added to your library successfully! Click on it now to create volumes and chapters.',
       confirmButtonColor: '#7c3aed',
       background: '#120b24',
       color: '#f8fafc'
@@ -2413,9 +2196,8 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gradient-to-tr from-[#02000a] via-[#0d091a] to-[#0a0514] dynamic-bg text-slate-200 overflow-hidden font-sans">
-      <TopBar />
-      <FloatingMusicPlayer />
-      
+      <TopBar onOpenSettings={() => setShowSettingsPage(true)} />
+
       {exportProgress && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm">
           <div className="liquid-glass rounded-3xl p-8 flex flex-col items-center gap-4 max-w-md w-full shadow-[0_20px_50px_rgba(168,85,247,0.35)] border border-purple-500/35 animate-fade-in">
@@ -2437,7 +2219,7 @@ export default function App() {
               }}
               className="flex items-center gap-2 bg-purple-950/45 hover:bg-purple-900 border border-purple-500/35 text-purple-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold font-display transition-all"
             >
-              ← Back للمكتبة (Library)
+              ← Back to Library
             </button>
             <div className="flex items-center gap-3">
               <TypeIcon className="text-purple-400" />
@@ -2699,9 +2481,9 @@ export default function App() {
               onClick={handleExportPsd}
               disabled={images.length === 0}
               className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors border-r border-purple-500/20"
-              title="Export حزمة PSD لبرنامج فوتوشوب (Photoshop Layout Layers Archive)"
+              title="Export PSD package for Photoshop (Photoshop Layout Layers Archive)"
             >
-              <Download size={16} className="text-purple-200" /> PSD جديد
+              <Download size={16} className="text-purple-200" /> New PSD
             </button>
             <button 
               onClick={handleExportPdf}
@@ -2741,13 +2523,22 @@ export default function App() {
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {activeNavigationTab === 'settings' && (
+        {showSettingsPage && (
           <div className="flex-1 flex flex-col p-8 bg-gradient-to-tr from-[#03010c] via-[#0b0718] to-black relative overflow-y-auto pb-32">
             <div className="absolute top-10 right-10 w-96 h-96 bg-purple-600/5 rounded-full blur-[140px] pointer-events-none" />
             <div className="max-w-5xl mx-auto w-full flex flex-col gap-8 relative z-10">
-              <div>
-                <h1 className="text-3xl font-display font-bold text-white tracking-tight">Studio Configuration Settings</h1>
-                <p className="text-sm text-slate-400 mt-1">Fine-tune translation thresholds, OCR dialects, parallel execution caches, and Gemini API keys.</p>
+              <div className="flex items-start justify-between">
+                <div>
+                  <h1 className="text-3xl font-display font-bold text-white tracking-tight">Studio Configuration Settings</h1>
+                  <p className="text-sm text-slate-400 mt-1">Fine-tune translation thresholds, OCR dialects, parallel execution caches, and Gemini API keys.</p>
+                </div>
+                <button
+                  onClick={() => setShowSettingsPage(false)}
+                  className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-all"
+                  aria-label="Close Settings"
+                >
+                  <X size={22} />
+                </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -2868,28 +2659,6 @@ export default function App() {
           </div>
         )}
 
-        {activeNavigationTab === 'cloud' && (
-          <CloudStorage onBack={() => setActiveNavigationTab('library')} />
-        )}
-
-        {activeNavigationTab === 'scheduler' && (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 bg-gradient-to-tr from-[#03010c] via-[#0b0718] to-black relative">
-            <div className="absolute top-10 right-10 w-96 h-96 bg-purple-600/5 rounded-full blur-[140px] pointer-events-none" />
-            <div className="text-center flex flex-col items-center max-w-lg z-10 animate-fade-in">
-              <div className="relative mb-6">
-                {/* Spinning gear (ترس دوار) */}
-                <Settings size={72} className="animate-spin text-purple-500 duration-[4000ms] ease-linear shadow-[0_0_40px_rgba(168,85,247,0.3)] rounded-full p-2 bg-purple-950/20 border border-purple-500/20" />
-                <span className="absolute bottom-0 right-0 w-4.5 h-4.5 bg-purple-500 border border-black rounded-full animate-ping"></span>
-              </div>
-              <h1 className="text-3xl font-display font-semibold text-white tracking-tight mb-2">إدارة الجدولة (Scheduler)</h1>
-              <p className="text-lg text-purple-300 font-sans mb-4">تحت العمل والتطوير المستمر حالياً...</p>
-              <div className="liquid-glass p-4 rounded-xl border border-purple-500/10 text-xs text-slate-400 font-sans leading-relaxed">
-                Tools أتمتة وجدولة دورات المسح والTranslation التلقائية للفصول الجديدة فور صدورها على مTextات Webtoon الكورية الرسمية.
-              </div>
-            </div>
-          </div>
-        )}
-
         {activeNavigationTab === 'library' && activeChapterId === null && (
           <div className="flex-1 flex flex-col p-8 bg-gradient-to-tr from-[#03010c] via-[#090615] to-black relative overflow-y-auto pb-32">
             <div className="absolute top-10 right-10 w-96 h-96 bg-purple-600/5 rounded-full blur-[140px] pointer-events-none" />
@@ -2927,35 +2696,29 @@ export default function App() {
                   </div>
                   
                   <h1 className="text-3xl font-display font-bold text-white tracking-tight">
-                    {!activeMangaId 
-                      ? 'قسم مكتبتي - السلاسل (Series Library)' 
-                      : !activeVolumeId 
-                        ? 'إدارة الVolumeات (Volumes List)' 
-                        : 'فصول الTranslation (Chapter Workspace)'}
+                    {!activeMangaId
+                      ? 'My Library - Series'
+                      : !activeVolumeId
+                        ? 'Manage Volumes (Volumes List)'
+                        : 'Translation Chapters (Chapter Workspace)'}
                   </h1>
                   <p className="text-xs text-slate-400 mt-1.5 font-sans leading-relaxed">
-                    {!activeMangaId 
-                      ? 'تصفح قصص المانجا والمانهوا الحالية، أو أنشئ سلسلة Translation جديدة بضغطة زر.' 
-                      : !activeVolumeId 
-                        ? 'اختر Volumeاً محدداً لتقسيم وإدارة فصول الTranslation التابعة له.' 
-                        : 'افتح فصل الTranslation للدخول إلى الاستوديو وبدء المسح الآلي وملاءمة الفقاعات وسحب النتائج.'}
+                    {!activeMangaId
+                      ? 'Browse your current manga and manhwa series, or create a new translation series with one click.'
+                      : !activeVolumeId
+                        ? 'Choose a specific volume to split and manage its translation chapters.'
+                        : 'Open a translation chapter to enter the studio and start automatic scanning, bubble fitting, and result export.'}
                   </p>
                 </div>
 
                 <div className="flex items-center gap-2.5">
                   {!activeMangaId && (
                     <>
-                      <button 
-                        onClick={loadDemoProject}
-                        className="bg-black/60 hover:bg-black border border-purple-500/25 text-purple-300 font-bold py-2.5 px-5 rounded-xl transition-all cursor-pointer text-xs"
-                      >
-                        ⚡ Loading عينة مانهوا (Load Demo)
-                      </button>
-                      <button 
+                      <button
                         onClick={() => setShowCreateSeriesModal(true)}
                         className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-2.5 px-5 rounded-xl transition-all cursor-pointer text-xs shadow-md"
                       >
-                        + إنشاء مانجا جديدة (New Manga)
+                        + New Manga
                       </button>
                     </>
                   )}
@@ -2965,13 +2728,13 @@ export default function App() {
                         onClick={() => { setActiveMangaId(null); }}
                         className="bg-black/60 border border-purple-500/15 hover:border-purple-500/40 text-slate-350 font-bold py-2.5 px-4 rounded-xl transition-all text-xs"
                       >
-                        ← Back للكل (Back)
+                        ← Back to All
                       </button>
                       <button 
                         onClick={handleAddVolumePrompt}
                         className="bg-purple-600 hover:bg-purple-550 text-white font-bold py-2.5 px-5 rounded-xl transition-all text-xs cursor-pointer shadow-md shadow-purple-950/45"
                       >
-                        + Add Volume جديد (Add Volume)
+                        + Add New Volume
                       </button>
                     </>
                   )}
@@ -2981,7 +2744,7 @@ export default function App() {
                         onClick={() => { setActiveVolumeId(null); }}
                         className="bg-black/60 border border-purple-500/15 hover:border-purple-500/40 text-slate-350 font-bold py-2.5 px-4 rounded-xl transition-all text-xs"
                       >
-                        ← الVolumeات (Volumes)
+                        ← Volumes
                       </button>
                       <label 
                         className="bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 text-purple-300 font-bold py-2.5 px-5 rounded-xl transition-all text-xs cursor-pointer flex items-center justify-center gap-2"
@@ -3004,7 +2767,7 @@ export default function App() {
                              const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/')).sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
                              
                              if (imageFiles.length === 0) {
-                               return Swal.fire('Empty', 'لا توجد Images في هذا الVolume', 'error');
+                               return Swal.fire('Empty', 'There are no images in this volume', 'error');
                              }
                              
                              const newImages: ProcessedImage[] = [];
@@ -3034,7 +2797,7 @@ export default function App() {
                              }
                              
                              const folderPathParts = imageFiles[0].webkitRelativePath.split('/');
-                             const chapterName = folderPathParts.length > 1 ? folderPathParts[0] : 'Chapter جديد (من Volume)';
+                             const chapterName = folderPathParts.length > 1 ? folderPathParts[0] : 'New Chapter (from Volume)';
                              
                              const newChapter: Chapter = {
                                id: Math.random().toString(36).substr(2, 9),
@@ -3079,15 +2842,15 @@ export default function App() {
                       <div className="w-16 h-16 bg-purple-950/20 border border-purple-500/20 rounded-2xl flex items-center justify-center text-purple-400 mx-auto mb-4">
                         <ImageIcon size={28} />
                       </div>
-                      <h3 className="text-lg font-bold text-slate-200">لا توجد سلاسل مانجا حالياً</h3>
+                      <h3 className="text-lg font-bold text-slate-200">No manga series yet</h3>
                       <p className="text-xs text-slate-400 max-w-sm mx-auto mt-2 leading-relaxed font-sans">
-                        قم بالبدء بإنشاء سلسلة مانجا/مانهوا جديدة لتسجيل فصولها وترجمتها بشكل منظم، أو اضغط زر "Loading عينة مانهوا" للحصول على مانهوا سولو ليفنج تجريبية.
+                        Start by creating a new manga/manhwa series to organize and translate its chapters.
                       </p>
                       <button
                         onClick={() => setShowCreateSeriesModal(true)}
                         className="mt-5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
                       >
-                        + إنشاء مانجا جديدة للبدء (Create New)
+                        + Create New Manga (Create New)
                       </button>
                     </div>
                   ) : (
@@ -3126,7 +2889,7 @@ export default function App() {
                               handleDeleteManga(manga.id);
                             }}
                             className="absolute top-4 right-4 bg-red-950/80 hover:bg-red-700 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md border border-red-500/20"
-                            title="Delete السلسلة من Library"
+                            title="Delete the series from Library"
                           >
                             <Trash2 size={13} />
                           </button>
@@ -3135,10 +2898,10 @@ export default function App() {
                           <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/60 backdrop-blur-md border-t border-purple-500/15 flex flex-col gap-1 transition-all group-hover:bg-[#110729]/85 z-10 text-left">
                             <span className="text-[10px] text-purple-400 tracking-wider uppercase font-mono font-bold">{manga.type}</span>
                             <h3 className="text-base font-display font-bold text-white tracking-tight truncate leading-tight">{manga.title}</h3>
-                            <p className="text-[11px] text-slate-350 leading-normal line-clamp-2 h-8 font-sans">{manga.description || 'لم يتم كتابة وصف مخصص لهذه السلسلة بعد.'}</p>
+                            <p className="text-[11px] text-slate-350 leading-normal line-clamp-2 h-8 font-sans">{manga.description || 'No custom description has been written for this series yet.'}</p>
                             <div className="flex items-center justify-between text-[10px] text-purple-300 font-mono mt-1 w-full pt-2 border-t border-purple-500/10">
-                              <span>📚 الVolumeات: {manga.volumes.length}</span>
-                              <span>📖 فصول: {totalChaptersCount}</span>
+                              <span>📚 Volumes: {manga.volumes.length}</span>
+                              <span>📖 Chapters: {totalChaptersCount}</span>
                             </div>
                           </div>
                         </div>
@@ -3160,15 +2923,15 @@ export default function App() {
                           <div className="w-16 h-16 bg-purple-950/20 border border-purple-500/20 rounded-2xl flex items-center justify-center text-purple-400 mx-auto mb-4">
                             <Plus size={28} />
                           </div>
-                          <h3 className="text-lg font-bold text-slate-200">لا توجد Volumeات حالياً</h3>
+                          <h3 className="text-lg font-bold text-slate-200">No volumes yet</h3>
                           <p className="text-xs text-slate-400 max-w-sm mx-auto mt-2 leading-relaxed">
-                            Volumeات المانجا تستخدم لتنظيم وتقسيم فئات فصول الTranslation الكبيرة (مثال: Volume 20، Volume 1).
+                            Manga volumes are used to organize and split large groups of translation chapters (example: Volume 20, Volume 1).
                           </p>
                           <button
                             onClick={handleAddVolumePrompt}
                             className="mt-5 bg-purple-600 hover:bg-purple-550 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
                           >
-                            + Add أول Volume جديد (Create Volume)
+                            + Add First Volume (Create Volume)
                           </button>
                         </div>
                       ) : (
@@ -3215,7 +2978,7 @@ export default function App() {
                                 handleDeleteVolume(vol.id);
                               }}
                               className="absolute top-4 right-4 bg-red-950/80 hover:bg-red-700 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md border border-red-500/20"
-                              title="Delete هذا الVolume كلياً"
+                              title="Delete this volume entirely"
                             >
                               <Trash2 size={13} />
                             </button>
@@ -3228,12 +2991,12 @@ export default function App() {
                               <h3 className="text-xl font-display font-bold text-purple-300 tracking-tight leading-none mb-1">{vol.name}</h3>
                               <p className="text-xs text-slate-350 line-clamp-2 h-8 font-sans leading-relaxed text-left">
                                 {vol.chapters.length > 0 
-                                  ? `يحتوي على: ${vol.chapters.map(c => c.name).join(', ')}` 
-                                  : 'Volume Empty حالياً، انقر لAdd فصول Translation جديدة بداخل هذا الVolume.'}
+                                  ? `Contains: ${vol.chapters.map(c => c.name).join(', ')}`
+                                  : 'This volume is currently empty. Click to add new translation chapters inside it.'}
                               </p>
                               <div className="flex justify-between items-center text-[10px] text-slate-400 font-mono mt-1 pt-2 border-t border-purple-500/10 w-full">
-                                <span>📖 الفصول: {vol.chapters.length} </span>
-                                <span className="text-emerald-500 font-bold font-mono">✔ نشط</span>
+                                <span>📖 Chapters: {vol.chapters.length} </span>
+                                <span className="text-emerald-500 font-bold font-mono">✔ Active</span>
                               </div>
                             </div>
                           </div>
@@ -3257,15 +3020,15 @@ export default function App() {
                           <div className="w-16 h-16 bg-purple-950/20 border border-purple-500/20 rounded-2xl flex items-center justify-center text-purple-400 mx-auto mb-4">
                             <Plus size={28} />
                           </div>
-                          <h3 className="text-lg font-bold text-slate-200">لا توجد فصول حالياً</h3>
+                          <h3 className="text-lg font-bold text-slate-200">No chapters yet</h3>
                           <p className="text-xs text-slate-400 max-w-sm mx-auto mt-2 leading-relaxed">
-                            أنشئ فصولاً لهذا الVolume للبدء فوراً في إرفاق صفحات المانجا وCleaning وملاءمة الفقاعات عبر الاستوديو الأساسي.
+                            Create chapters for this volume to immediately start attaching manga pages, cleaning, and fitting bubbles through the main studio.
                           </p>
                           <button
                             onClick={handleAddChapterPrompt}
                             className="mt-5 bg-indigo-600 hover:bg-indigo-550 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
                           >
-                            + Add Chapter جديد للTranslation (Add Chapter)
+                            + Add New Chapter for Translation (Add Chapter)
                           </button>
                         </div>
                       ) : (
@@ -3319,7 +3082,7 @@ export default function App() {
                                   handleDeleteChapter(chap.id);
                                 }}
                                 className="absolute top-4 right-4 bg-red-950/85 hover:bg-red-750 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md border border-red-500/20"
-                                title="Delete هذا الChapter كلياً"
+                                title="Delete this chapter entirely"
                               >
                                 <Trash2 size={13} />
                               </button>
@@ -3329,10 +3092,10 @@ export default function App() {
                                 <span className="text-[10px] text-indigo-400 tracking-wider font-mono font-bold">MANGA CHAPTER</span>
                                 <h3 className="text-base font-display font-bold text-white tracking-tight leading-none mb-1">{chap.name}</h3>
                                 <p className="text-[11px] text-slate-350 leading-normal line-clamp-1 font-sans">
-                                  {chap.images.length > 0 ? `يحتوي على ${chap.images.length} صفحة مجهزة.` : 'Chapter Empty. انقر للدخول وUpload الImages.'}
+                                  {chap.images.length > 0 ? `Contains ${chap.images.length} prepared pages.` : 'Chapter is empty. Click to enter and upload images.'}
                                 </p>
                                 <div className="flex justify-between items-center text-[10px] text-indigo-300 font-mono mt-1.5 pt-1.5 border-t border-purple-500/10 w-full">
-                                  <span>🚀 فتح بالاستوديو</span>
+                                  <span>🚀 Open in Studio</span>
                                   <span>{chap.images.length} Pages</span>
                                 </div>
                               </div>
@@ -3362,23 +3125,17 @@ export default function App() {
                 </svg>
               </div>
               <div className="flex flex-col gap-1.5">
-                <h3 className="text-2xl font-display font-bold text-white tracking-tight">هذا الفصل Empty حالياً (Chapter is Empty)</h3>
+                <h3 className="text-2xl font-display font-bold text-white tracking-tight">This chapter is currently empty (Chapter is Empty)</h3>
                 <p className="text-sm text-slate-400 max-w-md mt-1 mx-auto leading-relaxed font-sans">
-                  قم بإنشاء مساحتك داخل هدا الفصل عن طريق سحب وإسقاط ملف ZIP، أو Upload الصفحات واحدة تلو الأخرى، أو Loading Project تجريبي لتجربته فوراً.
+                  Get started by dragging and dropping a ZIP file, or uploading pages one by one.
                 </p>
               </div>
               <div className="flex flex-col sm:flex-row items-center gap-3 w-full mt-2">
-                <button 
+                <button
                   onClick={() => setShowCreateProjectModal(true)}
                   className="w-full sm:w-auto flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-3.5 px-6 rounded-xl shadow-lg shadow-purple-950/30 transition-all active:scale-95 cursor-pointer text-sm"
                 >
-                  + Upload وتجهيز الImages (Load Media)
-                </button>
-                <button 
-                  onClick={loadDemoProject}
-                  className="w-full sm:w-auto flex-1 bg-black/60 hover:bg-black/90 border border-purple-500/20 hover:border-purple-500/40 text-slate-350 font-bold py-3.5 px-6 rounded-xl transition-all active:scale-95 cursor-pointer text-sm"
-                >
-                  Loading الصفحات النموذجية (Load Sample)
+                  + Upload Images
                 </button>
               </div>
             </div>
@@ -3469,9 +3226,9 @@ export default function App() {
                   <button
                     onClick={() => setShowExternalAIModal(true)}
                     className="flex items-center gap-1.5 bg-[#090615] hover:bg-[#130d2a] border border-purple-500/30 text-purple-200 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-[0_4px_12px_rgba(168,85,247,0.15)]"
-                    title="Loading وطرح الTranslation عبر الذكاء الاصطناعي الخارجي المساعد"
+                    title="Load and submit translation via external AI assistant"
                   >
-                    <Sparkles size={13} className="text-purple-300 animate-bounce" /> كوكتيل الذكاء الاصطناعي الخارجي ✦
+                    <Sparkles size={13} className="text-purple-300 animate-bounce" /> External AI Cocktail ✦
                   </button>
                   
                   {/* Tool selection */}
@@ -3528,14 +3285,14 @@ export default function App() {
                     <button 
                       onClick={() => setActiveTool('crop')}
                       className={`p-1.5 rounded-md ${activeTool === 'crop' ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-slate-200 hover:text-indigo-300'}`}
-                      title="اقتصاص جزء للTranslation (AI Crop & Translate Panel)"
+                      title="Crop a section for translation (AI Crop & Translate Panel)"
                     >
                       <Scissors size={16} className="-rotate-90 text-indigo-400" />
                     </button>
                     <button 
                       onClick={() => setActiveTool('scribble_bubble')}
                       className={`p-1.5 rounded-md ${activeTool === 'scribble_bubble' ? 'bg-indigo-600 text-white' : 'text-purple-400 hover:text-purple-300 hover:bg-purple-950/20'}`}
-                      title="Select الفقاعة بالشخبطة الذكية (Scribble Bubble)"
+                      title="Select bubble with smart scribble (Scribble Bubble)"
                     >
                       <PenTool size={16} />
                     </button>
@@ -3696,7 +3453,7 @@ export default function App() {
                   <div className="bg-black border border-[#444] rounded-xl p-8 flex flex-col items-center gap-4 max-w-sm w-full shadow-2xl animate-fade-in text-center">
                     <Loader2 size={42} className="animate-spin text-indigo-500" />
                     <h3 className="text-sm font-bold text-white tracking-tight">Translating and Processing Manga with AI...</h3>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">يقوم Gemini الآن بتحليل وCleaning ومحاذاة القطاع المقتطع تلقائياً ومطابقته على الImagesة الكاملة بدقة فائقة.</p>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">Gemini is now analyzing, cleaning, and aligning the cropped section automatically, matching it to the full image with high precision.</p>
                   </div>
                 </div>
               )}
@@ -3769,7 +3526,7 @@ export default function App() {
                       onClick={handleTranslateCropQueue}
                       className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-lg transition-all active:scale-95 cursor-pointer"
                     >
-                      <Sparkles size={12} className="text-white shrink-0 animate-pulse" /> Translation مجمعة
+                      <Sparkles size={12} className="text-white shrink-0 animate-pulse" /> Batch Translation
                     </button>
                   </div>
                 </div>
@@ -3819,13 +3576,13 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5 col-span-2">
                     <div className="flex justify-between items-center">
-                      <label className="text-xs font-semibold text-purple-300">الخط المستخدم (Font Family)</label>
+                      <label className="text-xs font-semibold text-purple-300">Font Used (Font Family)</label>
                       <button 
                         onClick={() => fontInputRef.current?.click()}
                         className="text-[10px] text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1 font-sans bg-purple-950/20 px-1.5 py-0.5 rounded border border-purple-800/30"
-                        title="Upload خط مخصص (.ttf, .otf, .zip)"
+                        title="Upload a custom font (.ttf, .otf, .zip)"
                       >
-                        <Plus size={10} /> Upload خطوط مخصصة
+                        <Plus size={10} /> Upload Custom Fonts
                       </button>
                       <input 
                         type="file" 
@@ -3843,7 +3600,7 @@ export default function App() {
                       className="w-full bg-black border border-[#444] rounded-md p-2 text-sm outline-none font-sans"
                     >
                       {customFonts.map(font => (
-                        <option key={font} value={font} style={{ fontFamily: font }}>{font.replace('MET-', '')} (مرفوع) ✦</option>
+                        <option key={font} value={font} style={{ fontFamily: font }}>{font.replace('MET-', '')} (uploaded) ✦</option>
                       ))}
                       {["Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "Almarai", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas"].map(font => (
                         <option key={font} value={font} style={{ fontFamily: font }}>{font}</option>
@@ -3853,8 +3610,8 @@ export default function App() {
                     {/* Highly Elegant Visual Font Live Preview List */}
                     <div className="bg-[#0b0718]/80 border border-purple-900/30 rounded-xl p-2.5 mt-2 max-h-40 overflow-y-auto space-y-1.5 scrollbar-thin">
                       <p className="text-[10px] text-slate-400 font-sans tracking-tight mb-2 border-b border-purple-900/20 pb-1 flex justify-between">
-                        <span>قائمة المعاينة المباشرة للخطوط</span>
-                        <span className="text-purple-400">اسم الخط بمظهره ✦</span>
+                        <span>Live font preview list</span>
+                        <span className="text-purple-400">Font name in its own look ✦</span>
                       </p>
                       {customFonts.concat(["Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "Almarai", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Reem Kufi", "Rakkas"]).map((font) => (
                         <button
@@ -3864,7 +3621,7 @@ export default function App() {
                           className={`w-full text-left hover:bg-purple-950/40 p-2 rounded-lg text-xs transition-all flex justify-between items-center ${selectedRegion.fontFamily === font ? 'bg-purple-950/60 text-purple-300 border border-purple-700/50' : 'text-slate-300'}`}
                         >
                           <span className="text-[9px] text-slate-500 font-mono select-none">{font.replace('MET-', '')}</span>
-                          <span className="text-sm tracking-wide truncate max-w-[70%] text-left font-semibold">تصفيف: مانجا {font.replace('MET-', '')}</span>
+                          <span className="text-sm tracking-wide truncate max-w-[70%] text-left font-semibold">Styling: Manga {font.replace('MET-', '')}</span>
                         </button>
                       ))}
                     </div>
@@ -4068,10 +3825,10 @@ export default function App() {
 
                 {/* Dimensions and Coordinates manual inputs in Arabic/English */}
                 <div className="space-y-2 border-t border-[#333] pt-4 mt-2">
-                  <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">الإحداثيات والأبعاد (Dimensions)</h4>
+                  <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Coordinates and Dimensions</h4>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
-                      <label className="text-[10px] text-slate-500">X (موضع أفقي)</label>
+                      <label className="text-[10px] text-slate-500">X (horizontal position)</label>
                       <input 
                         type="number"
                         value={Math.round(selectedRegion.x)}
@@ -4080,7 +3837,7 @@ export default function App() {
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[10px] text-slate-500">Y (موضع رأسي)</label>
+                      <label className="text-[10px] text-slate-500">Y (vertical position)</label>
                       <input 
                         type="number"
                         value={Math.round(selectedRegion.y)}
@@ -4089,7 +3846,7 @@ export default function App() {
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[10px] text-slate-500">Width (العرض)</label>
+                      <label className="text-[10px] text-slate-500">Width</label>
                       <input 
                         type="number"
                         value={Math.round(selectedRegion.width)}
@@ -4098,7 +3855,7 @@ export default function App() {
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[10px] text-slate-500">Height (الارتفاع)</label>
+                      <label className="text-[10px] text-slate-500">Height</label>
                       <input 
                         type="number"
                         value={Math.round(selectedRegion.height)}
@@ -4108,7 +3865,7 @@ export default function App() {
                     </div>
                   </div>
                   <div className="space-y-1 mt-2">
-                    <label className="text-[10px] text-slate-500">Angle (الزاوية: {selectedRegion.angle || 0}°)</label>
+                    <label className="text-[10px] text-slate-500">Angle: {selectedRegion.angle || 0}°</label>
                     <input 
                       type="range"
                       min="-180"
@@ -4165,31 +3922,31 @@ export default function App() {
                     <button 
                       className="bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-800/50 text-xs py-2 px-3 rounded transition-colors flex items-center justify-center gap-1.5"
                       onClick={handleSplitBubble}
-                      title="فصل هندسي لفقاعتين دائرية مدمجة"
+                      title="Geometric split of two merged circular bubbles"
                     >
-                      <Scissors size={13} /> فصل الفقاعة
+                      <Scissors size={13} /> Split Bubble
                     </button>
                   </div>
 
                   {/* Kashida layouts */}
                   <div className="bg-purple-950/10 p-2 text-left rounded-lg border border-purple-900/20 space-y-1.5">
                     <label className="text-[10px] font-semibold text-purple-300 flex items-center justify-between">
-                      <span>كشيدة تمديد السطور العربية (Kashida)</span>
+                      <span>Line-extension kashida (Kashida)</span>
                       <span>✦</span>
                     </label>
                     <div className="flex gap-2">
                       <button 
                         onClick={() => applyKashidaHarmony('oval')}
                         className="flex-1 bg-purple-950/30 hover:bg-purple-900/55 border border-purple-800/40 text-[9px] py-1 px-1.5 rounded transition-all text-slate-200 font-sans"
-                        title="تمديد الخط للملاءمة الدائرية بالمنتصف"
+                        title="Extend text to fit circular shape at the center"
                       >
-                        كشيدة دائرية (ـ)
+                        Circular Kashida (ـ)
                       </button>
                       <button 
                         onClick={() => applyKashidaHarmony('rectangular')}
                         className="flex-1 bg-black hover:bg-[#111] border border-[#333] text-[9px] py-1 px-1.5 rounded transition-all text-slate-400 font-sans"
                       >
-                        مستطيل عادي
+                        Normal Rectangle
                       </button>
                     </div>
                   </div>
@@ -4360,40 +4117,6 @@ export default function App() {
       {/* Dynamic Purple/Black Liquid Glass Bottom Toolbar */}
       {activeChapterId === null && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-6 py-2.5 bg-black/90 backdrop-blur-xl border border-purple-500/25 rounded-full shadow-[0_12px_45px_-8px_rgba(147,51,234,0.45)] flex items-center justify-between gap-10 z-50 transition-all hover:border-purple-500/40">
-          
-          {/* Left Side Tab Actions (Scheduler, Settings) */}
-          <div className="flex items-center gap-6">
-            <button 
-              type="button"
-              onClick={() => setActiveNavigationTab('settings')}
-              className={`flex flex-col items-center gap-1 transition-all group ${activeNavigationTab === 'settings' ? 'text-purple-400 scale-105 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              <div className={`p-1.5 rounded-xl transition-all ${activeNavigationTab === 'settings' ? 'bg-purple-950/40 shadow-[0_0_12px_rgba(168,85,247,0.2)]' : 'group-hover:bg-white/5'}`}>
-                <svg className="w-5 h-5 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx={12} cy={12} r={3} />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-              </div>
-              <span className="text-[10px] font-medium tracking-wide">Settings</span>
-            </button>
-
-            <button 
-              type="button"
-              onClick={() => setActiveNavigationTab('scheduler')}
-              className={`flex flex-col items-center gap-1 transition-all group ${activeNavigationTab === 'scheduler' ? 'text-purple-400 scale-105 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              <div className={`p-1.5 rounded-xl transition-all ${activeNavigationTab === 'scheduler' ? 'bg-purple-950/40 shadow-[0_0_12px_rgba(168,85,247,0.2)]' : 'group-hover:bg-white/5'}`}>
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                  <rect x={3} y={4} width={18} height={18} rx={2} ry={2} />
-                  <line x1={16} y1={2} x2={16} y2={6} />
-                  <line x1={8} y1={2} x2={8} y2={6} />
-                  <line x1={3} y1={10} x2={21} y2={10} />
-                  <path d="M12 14v4h4" />
-                </svg>
-              </div>
-              <span className="text-[10px] font-medium tracking-wide">Scheduler</span>
-            </button>
-          </div>
 
           {/* Central Standalone Black Circular Plus Button */}
           <div className="relative -mt-6">
@@ -4411,7 +4134,7 @@ export default function App() {
                 }
               }}
               className="w-14 h-14 bg-black border-2 border-purple-500 rounded-full flex items-center justify-center shadow-[0_5px_22px_rgba(168,85,247,0.55)] cursor-pointer text-white hover:scale-110 active:scale-95 transition-all duration-350"
-              title="أنشئ Projectاً جديداً"
+              title="Create a new project"
             >
               <svg className="w-6 h-6 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
                 <line x1={12} y1={5} x2={12} y2={19} />
@@ -4420,25 +4143,11 @@ export default function App() {
             </button>
           </div>
 
-          {/* Right Side Tab Actions (Cloud Storage, Library) */}
+          {/* Right Side Tab Action (Library) */}
           <div className="flex items-center gap-6">
-            <button 
+            <button
               type="button"
-              onClick={() => setActiveNavigationTab('cloud')}
-              className={`flex flex-col items-center gap-1 transition-all group ${activeNavigationTab === 'cloud' ? 'text-purple-400 scale-105 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              <div className={`p-1.5 rounded-xl transition-all ${activeNavigationTab === 'cloud' ? 'bg-purple-950/40 shadow-[0_0_12px_rgba(168,85,247,0.2)]' : 'group-hover:bg-white/5'}`}>
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 10v6M9 13l3 3 3-3" />
-                  <path d="M20.88 18.04A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29" />
-                </svg>
-              </div>
-              <span className="text-[10px] font-medium tracking-wide">Cloud</span>
-            </button>
-
-            <button 
-              type="button"
-              onClick={() => setActiveNavigationTab('library')}
+              onClick={() => {}}
               className={`flex flex-col items-center gap-1 transition-all group ${activeNavigationTab === 'library' ? 'text-purple-400 scale-105 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
             >
               <div className={`p-1.5 rounded-xl transition-all ${activeNavigationTab === 'library' ? 'bg-purple-950/40 shadow-[0_0_12px_rgba(168,85,247,0.2)]' : 'group-hover:bg-white/5'}`}>
@@ -4553,19 +4262,6 @@ export default function App() {
                 </div>
               </button>
             </div>
-            
-            <div className="border-t border-purple-500/10 pt-4 flex items-center justify-between gap-4 flex-col sm:flex-row mt-2 text-left animate-fade-in">
-              <span className="text-[11px] text-slate-400 font-mono">💡 No chapters offline? Try the interactive playground.</span>
-              <button 
-                onClick={() => {
-                  setShowCreateProjectModal(false);
-                  loadDemoProject();
-                }}
-                className="px-4 py-2 text-xs font-bold text-white rounded-xl bg-purple-600 hover:bg-purple-500 shadow-lg shadow-purple-900/30 transition-all active:scale-95 cursor-pointer"
-              >
-                Load Sample Demo Project
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -4583,17 +4279,17 @@ export default function App() {
             
             <div className="flex flex-col gap-1.5 text-left border-b border-purple-500/10 pb-4">
               <h2 className="text-2xl font-display font-bold text-white flex items-center gap-2 justify-start">
-                <span className="text-purple-400">✧</span> Add سلسلة جديدة لمكتبتك
+                <span className="text-purple-400">✧</span> Add a New Series to Your Library
               </h2>
               <p className="text-xs text-slate-400">
-                أنشئ عملاً أو سلسلة مانجا/مانهوا جديدة لتنظيم وإتباع الVolumeات وفصول الTranslation بداخلها.
+                Create a new manga/manhwa work or series to organize and track its volumes and translation chapters.
               </p>
             </div>
 
             <div className="space-y-4 text-left">
               {/* Cover Upload / URL Preview inline */}
               <div className="space-y-1.5 text-start">
-                <label className="text-xs font-semibold text-purple-300 block text-left">Imagesة غلاف السلسلة (PNG أو JPG):</label>
+                <label className="text-xs font-semibold text-purple-300 block text-left">Series Cover Image (PNG or JPG):</label>
                 <div className="flex items-center gap-4 flex-row-reverse">
                   <div className="w-20 h-24 rounded-lg border border-purple-500/10 bg-[#0c061c] overflow-hidden flex items-center justify-center shrink-0">
                     {newSeriesCoverUrl ? (
@@ -4614,19 +4310,19 @@ export default function App() {
                       htmlFor="series-cover-file"
                       className="cursor-pointer bg-purple-950/40 hover:bg-purple-900 border border-purple-500/30 text-purple-300 px-4 py-2 rounded-xl text-xs font-bold text-center transition-all block"
                     >
-                      اختر Imagesة من جهازك
+                      Choose an image from your device
                     </label>
-                    <span className="text-[10px] text-slate-500 text-center font-mono block">(الموصى به: نسبة طول إلى عرض 4:3)</span>
+                    <span className="text-[10px] text-slate-500 text-center font-mono block">(Recommended: 4:3 aspect ratio)</span>
                   </div>
                 </div>
               </div>
 
               {/* Series Title */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-purple-300 block text-left">عنوان السلسلة:</label>
+                <label className="text-xs font-semibold text-purple-300 block text-left">Series Title:</label>
                 <input 
                   type="text"
-                  placeholder="مثال: Solo Leveling أو مانهوا سولو ليفنج..."
+                  placeholder="e.g.: My Manga Series..."
                   value={newSeriesTitle}
                   onChange={(e) => setNewSeriesTitle(e.target.value)}
                   className="w-full bg-black/60 border border-purple-500/20 hover:border-purple-500/40 focus:border-purple-400 rounded-xl p-3 text-sm text-white outline-none font-sans text-left"
@@ -4635,29 +4331,29 @@ export default function App() {
 
               {/* Series Type */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-purple-300 block text-left">النوع (Classification):</label>
+                <label className="text-xs font-semibold text-purple-300 block text-left">Type (Classification):</label>
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     onClick={() => setNewSeriesType('manga')}
                     className={`p-3 rounded-xl border text-xs font-bold transition-all text-center ${newSeriesType === 'manga' ? 'bg-amber-600/35 border-amber-500 text-amber-200' : 'bg-[#080512]/60 border-purple-500/10 text-slate-404'}`}
                   >
-                    Manga (مانجا صفراء)
+                    Manga (black &amp; white)
                   </button>
                   <button
                     onClick={() => setNewSeriesType('manhwa')}
                     className={`p-3 rounded-xl border text-xs font-bold transition-all text-center ${newSeriesType === 'manhwa' ? 'bg-indigo-600/35 border-indigo-500 text-blue-200' : 'bg-[#080512]/60 border-[#555]/10 text-slate-405'}`}
                   >
-                    Manhwa (مانهوا ملونة)
+                    Manhwa (colored)
                   </button>
                 </div>
               </div>
 
               {/* Series Description */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-purple-300 block text-left">نبذة أو وصف مختصر:</label>
+                <label className="text-xs font-semibold text-purple-300 block text-left">Brief Description or Summary:</label>
                 <textarea 
                   rows={3}
-                  placeholder="اكتب وصفاً مختصراً لقصة المانجا أو Details المترجمين..."
+                  placeholder="Write a brief description of the manga's story or translator details..."
                   value={newSeriesDesc}
                   onChange={(e) => setNewSeriesDesc(e.target.value)}
                   className="w-full bg-black/60 border border-purple-500/20 hover:border-purple-500/40 focus:border-purple-400 rounded-xl p-3 text-sm text-white outline-none resize-none font-sans text-left"
@@ -4676,7 +4372,7 @@ export default function App() {
                 onClick={handleCreateSeries}
                 className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-2.5 px-7 rounded-xl text-xs transition-all shadow-lg shadow-purple-950/45 cursor-pointer"
               >
-                ✓ إنشاء وAdd السلسلة
+                ✓ Create and Add Series
               </button>
             </div>
           </div>
@@ -4696,10 +4392,10 @@ export default function App() {
             
             <div className="flex flex-col gap-1.5 text-left border-b border-purple-500/10 pb-4">
               <h2 className="text-2xl font-display font-bold text-white flex items-center gap-2 justify-start">
-                <span className="text-purple-400">✧</span> معالج الTranslation المساعد عبر الذكاء الاصطناعي الخارجي
+                <span className="text-purple-400">✧</span> Translation Wizard via External AI Assistant
               </h2>
               <p className="text-xs text-slate-400">
-                إذا لم تكن تمتلك مفاتيح API خاصة داخل التطبيق، يمكنك تزويد أي نموذج ذكاء اصطناعي خارجي (مثل Claude 3.5 Sonnet أو Gemini 1.5 Pro) بImagesة الصفحة والطلب التفصيلي أدناه ليعود لك بملف الTranslation وتطبيقه بلحظة واحدة!
+                If you don't have your own API keys inside the app, you can provide any external AI model (such as Claude 3.5 Sonnet or Gemini 1.5 Pro) with the page image and the detailed prompt below, so it can return the translation file for you to apply instantly!
               </p>
             </div>
 
@@ -4707,11 +4403,11 @@ export default function App() {
               {/* Step 1 */}
               <div className="space-y-2 border border-purple-500/10 p-4 rounded-2xl bg-purple-950/5">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center">١</span>
-                  الخطوة الأولى: نسخ باقة الطلب (AI Request Cocktail)
+                  <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center">1</span>
+                  Step One: Copy the Request Bundle (AI Request Cocktail)
                 </h3>
                 <p className="text-xs text-slate-400">
-                  انسخ المطالبة التفصيلية الجاهزة وأرسلها للـ AI الخارجي مع Imagesة الصفحة المفتوحة حالياً للCleaning بالذكاء الاصطناعي:
+                  Copy the ready detailed prompt and send it to the external AI along with the currently open page image, for AI cleaning:
                 </p>
                 <div className="relative">
                   <textarea
@@ -4726,7 +4422,7 @@ Please locate speech balloons and output exactly in this JSON format ONLY (No ot
     "ymax": 380,
     "type": "bubble",
     "originalText": "Original English balloon text",
-    "translatedText": "الTranslation العربية البديلة والمحاذاة للوسط"
+    "translatedText": "the alternate translated text, centered"
   }
 ]`}
                     className="w-full h-28 bg-black/60 border border-[#444] rounded-xl p-3 text-xs text-slate-350 font-mono resize-none text-left"
@@ -4744,13 +4440,13 @@ Please locate speech balloons and output exactly in this JSON format ONLY (No ot
     "ymax": 380,
     "type": "bubble",
     "originalText": "Original English balloon text",
-    "translatedText": "الTranslation العربية البديلة والمحاذاة للوسط"
+    "translatedText": "the alternate translated text, centered"
   }
 ]`);
                       Swal.fire({
                         icon: 'success',
-                        title: 'تم نسخ برومبت الكوكتيل!',
-                        text: 'يمكنك الآن لصقه وتزويد كلاود أو جيمناي به بالخارج.',
+                        title: 'Cocktail prompt copied!',
+                        text: 'You can now paste it and provide it to Claude or Gemini externally.',
                         timer: 1500,
                         showConfirmButton: false,
                         background: '#090615',
@@ -4759,7 +4455,7 @@ Please locate speech balloons and output exactly in this JSON format ONLY (No ot
                     }}
                     className="absolute bottom-3 left-3 bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg transition-all"
                   >
-                    نسخ الطلب (Copy)
+                    Copy Request (Copy)
                   </button>
                 </div>
               </div>
@@ -4767,14 +4463,14 @@ Please locate speech balloons and output exactly in this JSON format ONLY (No ot
               {/* Step 2 */}
               <div className="space-y-2 border border-purple-500/10 p-4 rounded-2xl bg-purple-950/5">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center">٢</span>
-                  الخطوة الثانية: لصق الاستجابة المسترجعة (Pasted Response JSON)
+                  <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center">2</span>
+                  Step Two: Paste the Retrieved Response (Pasted Response JSON)
                 </h3>
                 <p className="text-xs text-slate-400">
-                  الصق الاستجابة التي صاغها لك الذكاء الاصطناعي الخارجي وسنقوم بتوزيع الTranslation على إحداثيات الصفحة فوراً:
+                  Paste the response that the external AI crafted for you, and we'll distribute the translation onto the page coordinates instantly:
                 </p>
                 <textarea
-                  placeholder="[ ... مصفوفة الـ JSON المسترجعة ... ]"
+                  placeholder="[ ... the retrieved JSON array ... ]"
                   value={externalAIPasteData}
                   onChange={(e) => setExternalAIPasteData(e.target.value)}
                   className="w-full h-32 bg-black border border-purple-500/20 focus:border-purple-400 rounded-xl p-3 text-xs text-slate-205 outline-none resize-none font-mono text-left"
@@ -4794,7 +4490,7 @@ Please locate speech balloons and output exactly in this JSON format ONLY (No ot
                 onClick={handleApplyExternalAICocktail}
                 className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-2.5 px-7 rounded-xl text-xs transition-all shadow-lg shadow-purple-950/45 cursor-pointer"
               >
-                ✓ تطبيق الTranslation الذكي على الصفحة
+                ✓ Apply Smart Translation to the Page
               </button>
             </div>
           </div>

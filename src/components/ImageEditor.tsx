@@ -598,7 +598,7 @@ export function ImageEditor({
                       <Text
                         x={labelX + 6}
                         y={labelY + 2}
-                        text="الحد الذكي للفقاعة"
+                        text="Smart Bubble Bound"
                         fontFamily="Cairo"
                         fontSize={8.5}
                         fontWeight="bold"
@@ -668,7 +668,7 @@ export function ImageEditor({
                   }}
                   className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded font-bold transition-all active:scale-95 shadow-md cursor-pointer"
                 >
-                  <Plus size={12} className="text-emerald-200" /> إضافة لطابور التجميع (Add to Batch Queue)
+                  <Plus size={12} className="text-emerald-200" /> Add to Batch Queue
                 </button>
                 <div className="w-px bg-slate-800 h-5"></div>
                 <button
@@ -680,14 +680,14 @@ export function ImageEditor({
                   }}
                   className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded font-bold transition-all active:scale-95 shadow-md cursor-pointer"
                 >
-                  <Sparkles size={12} className="text-indigo-200 animate-pulse" /> ترجمة فورية (Direct Translate)
+                  <Sparkles size={12} className="text-indigo-200 animate-pulse" /> Direct Translate
                 </button>
                 <div className="w-px bg-slate-800 h-5"></div>
                 <button
                   onClick={() => setCropRect(null)}
                   className="text-slate-400 hover:text-white text-xs px-2.5 py-1.5 rounded transition-all font-medium cursor-pointer"
                 >
-                  إلغاء (Cancel)
+                  Cancel
                 </button>
               </div>
             </div>
