@@ -44,11 +44,14 @@ export interface ProcessedImage {
   regions: Region[];
   paintStrokes: PaintStroke[];
   history?: { regions: Region[], paintStrokes: PaintStroke[] }[];
+  redoHistory?: { regions: Region[], paintStrokes: PaintStroke[] }[];
   status: "idle" | "processing" | "done" | "error";
   width: number;
   height: number;
   error?: string;
 }
+
+export type Tool = 'select' | 'draw' | 'erase';
 
 export interface CropSelection {
   id: string;

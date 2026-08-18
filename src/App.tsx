@@ -1,20 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback, Suspense } from 'react';
-import { Upload, Download, Play, Save, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, PenTool, ZoomIn, ZoomOut, Maximize, Palette, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Key, Sparkles, Scissors, Undo, Wand2, Settings, X } from 'lucide-react';
+import { Upload, Download, Play, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, ZoomIn, ZoomOut, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Sparkles, Undo, Redo, Wand2, Scissors, Settings, Search, X } from 'lucide-react';
 import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingleImage } from './lib/zip';
-import { processMangaPages, generateInpaint, RawRegion } from './lib/gemini';
+import { processMangaPages, RawRegion } from './lib/gemini';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
-import { createTranslationDoc, parseTranslationDoc } from './lib/translationDoc';
-import { ProcessedImage, Region, PaintStroke, CropSelection, MangaSeries, Volume, Chapter } from './types';
+import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool } from './types';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
-import { TopBar } from './components/TopBar';
 
 const ImageEditor = React.lazy(() => import('./components/ImageEditor').then(m => ({ default: m.ImageEditor })));
-
-type Tool = 'select' | 'draw' | 'erase' | 'fill_poly' | 'bg_erase' | 'smart_sfx' | 'gen_erase' | 'crop' | 'scribble_bubble';
 
 export default function App() {
   const [images, setImages] = useState<ProcessedImage[]>([]);
@@ -23,11 +19,7 @@ export default function App() {
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   const [selectedForProcess, setSelectedForProcess] = useState<Set<string>>(new Set());
-  const [bubblePreviews, setBubblePreviews] = useState<{ [imgId: string]: any[] }>({});
-  const [showBubblePreviews, setShowBubblePreviews] = useState(false);
-  const [isGeneratingPreviews, setIsGeneratingPreviews] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const projectInputRef = useRef<HTMLInputElement>(null);
 
   // Manga Hierarchical Library state
   const [mangas, setMangas] = useState<MangaSeries[]>([]);
@@ -86,7 +78,6 @@ export default function App() {
   
   // Settings State
   const [customApiKey, setCustomApiKey] = useState('');
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [customInstructions, setCustomInstructions] = useState('');
   const [translateJapanese, setTranslateJapanese] = useState(true);
   const [translateSfx, setTranslateSfx] = useState(true);
@@ -98,7 +89,6 @@ export default function App() {
   const [compressBeforeProcessing, setCompressBeforeProcessing] = useState<boolean>(() => {
     return localStorage.getItem('manga_compress_before_processing') !== 'false';
   });
-  const [cropsQueue, setCropsQueue] = useState<CropSelection[]>([]);
   
   const [customFonts, setCustomFonts] = useState<string[]>([]);
   const [showExternalAIModal, setShowExternalAIModal] = useState(false);
@@ -109,6 +99,12 @@ export default function App() {
   const [activeNavigationTab] = useState<'library'>('library');
   const [showSettingsPage, setShowSettingsPage] = useState(false);
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
+  const [showManagePages, setShowManagePages] = useState(false);
+  const [showRightPanel, setShowRightPanel] = useState(false);
+  const [librarySearchQuery, setLibrarySearchQuery] = useState('');
+  const filteredMangas = librarySearchQuery.trim()
+    ? mangas.filter(m => m.title.toLowerCase().includes(librarySearchQuery.trim().toLowerCase()))
+    : mangas;
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -234,15 +230,13 @@ export default function App() {
   const [brushColor, setBrushColor] = useState('#ffffff');
   const [zoom, setZoom] = useState(1);
   const [showOriginal, setShowOriginal] = useState(false);
-  const [showText, setShowText] = useState(true);
-
-  const [manhwaMode, setManhwaMode] = useState<boolean>(() => {
-    return localStorage.getItem('manhwa_mode') === 'true';
-  });
-  const [isProcessingCrop, setIsProcessingCrop] = useState(false);
 
   const selectedImage = images.find(img => img.id === selectedImageId);
   const selectedRegion = selectedImage?.regions.find(r => r.id === selectedRegionId);
+
+  useEffect(() => {
+    if (selectedRegionId) setShowRightPanel(true);
+  }, [selectedRegionId]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -262,6 +256,16 @@ export default function App() {
           }));
           setSelectedRegionId(null);
         }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey) {
+        e.preventDefault();
+        if (selectedImageId) {
+          redo(selectedImageId);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault();
+        if (selectedImageId) {
+          redo(selectedImageId);
+        }
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         if (selectedImageId) {
@@ -275,31 +279,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedImageId, selectedRegionId, images]);
 
-  const handleSaveProject = () => {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(images));
-    const a = document.createElement('a');
-    a.href = dataStr;
-    a.download = "manga_project.json";
-    a.click();
-  };
-
-  const handleLoadProject = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = JSON.parse(event.target?.result as string);
-        setImages(data);
-        if (data.length > 0) setSelectedImageId(data[0].id);
-      } catch (err) {
-        alert("Invalid project file.");
-      }
-    };
-    reader.readAsText(file);
-    if (projectInputRef.current) projectInputRef.current.value = '';
-  };
-
   const handleApplyExternalAICocktail = () => {
     if (!selectedImageId) {
       Swal.fire({
@@ -308,7 +287,7 @@ export default function App() {
         text: 'Please open a single page and select it in the studio first to apply the translation.',
         background: '#090615',
         color: '#ffffff',
-        confirmButtonColor: '#7c3aed'
+        confirmButtonColor: '#2563eb'
       });
       return;
     }
@@ -324,7 +303,7 @@ export default function App() {
           text: 'Please paste the code (JSON array) retrieved from the AI first.',
           background: '#090615',
           color: '#ffffff',
-          confirmButtonColor: '#7c3aed'
+          confirmButtonColor: '#2563eb'
         });
         return;
       }
@@ -388,7 +367,7 @@ export default function App() {
         icon: 'success',
         title: 'External translation merged successfully!',
         text: `Recognized and recovered ${newRegions.length} dialogue bubbles and applied them intelligently with centered text.`,
-        confirmButtonColor: '#7c3aed',
+        confirmButtonColor: '#2563eb',
         background: '#090615',
         color: '#ffffff'
       });
@@ -398,7 +377,7 @@ export default function App() {
         icon: 'error',
         title: 'Invalid Format',
         text: 'Failed to parse the pasted text as a valid list of translation entries. Make sure the retrieved JSON array is valid.',
-        confirmButtonColor: '#7c3aed',
+        confirmButtonColor: '#2563eb',
         background: '#090615',
         color: '#ffffff'
       });
@@ -460,7 +439,7 @@ export default function App() {
           title: 'Custom fonts activated!',
           text: `Extracted and loaded ${loadedFonts.length} fonts successfully into the studio.`,
           confirmButtonText: 'Great',
-          confirmButtonColor: '#7c3aed',
+          confirmButtonColor: '#2563eb',
           background: '#090615',
           color: '#ffffff'
         });
@@ -469,7 +448,7 @@ export default function App() {
           icon: 'error',
           title: 'Error Processing File',
           text: 'No valid fonts (TTF/OTF) were found inside the uploaded file.',
-          confirmButtonColor: '#7c3aed',
+          confirmButtonColor: '#2563eb',
           background: '#090615',
           color: '#ffffff'
         });
@@ -480,7 +459,7 @@ export default function App() {
         icon: 'error',
         title: 'Failed to Install Fonts',
         text: 'An unexpected error occurred while extracting and reading the font files.',
-        confirmButtonColor: '#7c3aed',
+        confirmButtonColor: '#2563eb',
         background: '#090615',
         color: '#ffffff'
       });
@@ -718,7 +697,7 @@ export default function App() {
         title: 'PSD layer package exported successfully!',
         text: 'You have received a ZIP file containing fully separated layers, independent transparent text layers, and high-resolution artwork ready to continue in Photoshop.',
         confirmButtonText: 'Excellent',
-        confirmButtonColor: '#7c3aed',
+        confirmButtonColor: '#2563eb',
         background: '#090615',
         color: '#ffffff'
       });
@@ -726,106 +705,6 @@ export default function App() {
       console.error(err);
       Swal.fire('Export Error', 'Failed to write the exported PSD file.', 'error');
     }
-  };
-
-  const handleScribbleBubble = (seedX: number, seedY: number) => {
-    if (!selectedImageId) return;
-    const img = images.find(i => i.id === selectedImageId);
-    if (!img) return;
-
-    const imageObj = new Image();
-    imageObj.crossOrigin = 'anonymous';
-    imageObj.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = imageObj.width;
-      canvas.height = imageObj.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      
-      ctx.drawImage(imageObj, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      
-      const result = floodFillBubbleDetailed(imageData, Math.floor(seedX), Math.floor(seedY), imageObj.width, imageObj.height);
-      
-      if (result) {
-        saveHistory(img.id);
-        const id = 'region-' + Math.random().toString(36).substr(2, 9);
-        const newRegion: Region = {
-          id,
-          type: 'bubble',
-          x: result.safeTextBounds.x,
-          y: result.safeTextBounds.y,
-          width: result.safeTextBounds.width,
-          height: result.safeTextBounds.height,
-          bubbleContour: result.contour,
-          angle: 0,
-          bgColor: 'transparent',
-          textColor: '#000000',
-          strokeColor: '#ffffff',
-          strokeWidth: 2,
-          fontFamily: customFonts[0] || 'Cairo',
-          fontSize: 24,
-          fontWeight: 'bold',
-          fontStyle: 'normal',
-          textAlign: 'center',
-          lineHeight: 1.3,
-          originalText: 'Scribble Detected Area',
-          translatedText: 'New bubble text',
-          autoFitText: true
-        };
-
-        const updatedImages = images.map(item => {
-          if (item.id !== img.id) return item;
-          return {
-            ...item,
-            regions: [...item.regions, newRegion]
-          };
-        });
-
-        setImages(updatedImages);
-        setSelectedRegionId(id);
-        
-        setMangas(prev => prev.map(m => {
-          if (m.id !== activeMangaId) return m;
-          return {
-            ...m,
-            volumes: m.volumes.map(v => {
-              if (v.id !== activeVolumeId) return v;
-              return {
-                ...v,
-                chapters: v.chapters.map(c => {
-                  if (c.id !== activeChapterId) return c;
-                  return {
-                    ...c,
-                    images: updatedImages
-                  };
-                })
-              };
-            })
-          };
-        }));
-        
-        Swal.fire({
-          icon: 'success',
-          title: 'Smart alignment bounds!',
-          text: 'The dialogue bubble was automatically detected and contained from the scribble, with text centered.',
-          timer: 1500,
-          showConfirmButton: false,
-          background: '#090615',
-          color: '#ffffff'
-        });
-      } else {
-        Swal.fire({
-          icon: 'warning',
-          title: 'Notice',
-          text: 'Could not automatically detect the bubble bounds from the scribble point. Please try scribbling right in the center of the bubble.',
-          confirmButtonColor: '#7c3aed',
-          background: '#090615',
-          color: '#ffffff'
-        });
-      }
-    };
-    imageObj.src = img.originalDataUrl || img.dataUrl;
   };
 
   const handleZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -868,7 +747,7 @@ export default function App() {
         icon: 'error',
         title: 'ZIP Import Failed',
         text: 'The archive might be corrupted or in an unsupported format.',
-        confirmButtonColor: '#7c3aed',
+        confirmButtonColor: '#2563eb',
         background: '#120b24',
         color: '#f8fafc'
       });
@@ -945,7 +824,7 @@ export default function App() {
         icon: 'success',
         title: 'Manga Cleaning Plates Merged!',
         text: 'Successfully swapped original sheets for whitened plates. Use the "View Original" toggle to inspect any changes.',
-        confirmButtonColor: '#7c3aed',
+        confirmButtonColor: '#2563eb',
         background: '#120b24',
         color: '#f8fafc'
       });
@@ -975,7 +854,8 @@ export default function App() {
           regions: JSON.parse(JSON.stringify(img.regions)),
           paintStrokes: JSON.parse(JSON.stringify(img.paintStrokes))
         }].slice(-20); // Keep last 20 steps
-        return { ...img, history: newHistory };
+        // A fresh action invalidates the redo stack
+        return { ...img, history: newHistory, redoHistory: [] };
       }
       return img;
     }));
@@ -988,11 +868,39 @@ export default function App() {
         if (history.length === 0) return img;
         const prevState = history[history.length - 1];
         const newHistory = history.slice(0, -1);
+        const redoHistory = [...(img.redoHistory || []), {
+          regions: img.regions,
+          paintStrokes: img.paintStrokes
+        }].slice(-20);
         return {
           ...img,
           regions: prevState.regions,
           paintStrokes: prevState.paintStrokes,
-          history: newHistory
+          history: newHistory,
+          redoHistory
+        };
+      }
+      return img;
+    }));
+  };
+
+  const redo = (imgId: string) => {
+    setImages(prev => prev.map(img => {
+      if (img.id === imgId) {
+        const redoHistory = img.redoHistory || [];
+        if (redoHistory.length === 0) return img;
+        const nextState = redoHistory[redoHistory.length - 1];
+        const newRedoHistory = redoHistory.slice(0, -1);
+        const history = [...(img.history || []), {
+          regions: img.regions,
+          paintStrokes: img.paintStrokes
+        }].slice(-20);
+        return {
+          ...img,
+          regions: nextState.regions,
+          paintStrokes: nextState.paintStrokes,
+          history,
+          redoHistory: newRedoHistory
         };
       }
       return img;
@@ -1093,505 +1001,6 @@ export default function App() {
       console.error("Error auto-tracing bubbles:", e);
       return regions;
     }
-  };
-
-  const handleProcessCropSection = async (rect: { x: number, y: number, w: number, h: number }) => {
-    const img = images.find(i => i.id === selectedImageId);
-    if (!img) return;
-
-    setIsProcessingCrop(true);
-    try {
-      const imgSrc = img.originalDataUrl || img.dataUrl;
-      const imageObj = new Image();
-      imageObj.src = imgSrc;
-      await new Promise((resolve, reject) => {
-        imageObj.onload = resolve;
-        imageObj.onerror = reject;
-      });
-
-      const canvas = document.createElement('canvas');
-      canvas.width = rect.w;
-      canvas.height = rect.h;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        throw new Error("Unable to create canvas 2D context");
-      }
-
-      // Draw only the cropped section
-      ctx.drawImage(imageObj, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
-      const croppedBase64DataUrl = canvas.toDataURL('image/jpeg', 0.95);
-
-      const key = customApiKey || '';
-      
-      const results = await processMangaPages(
-        [{ id: 'crop-temp', base64Image: croppedBase64DataUrl, mimeType: 'image/jpeg' }],
-        key,
-        customInstructions,
-        translateJapanese,
-        translateSfx
-      );
-
-      const rawRegions = results[0]?.regions || [];
-      if (rawRegions.length === 0) {
-        Swal.fire({
-          icon: 'info',
-          title: 'No Texts Found',
-          text: 'The AI model could not detect any text or bubbles in this specified crop segment.',
-          background: '#120b24',
-          color: '#f8fafc',
-          confirmButtonColor: '#7c3aed'
-        });
-        return;
-      }
-
-      // Project regions back to the master image coordinate system
-      let newRegions: Region[] = rawRegions.map((raw, idx) => {
-        const cx = (raw.xmin / 1000) * rect.w;
-        const cy = (raw.ymin / 1000) * rect.h;
-        const cw = ((raw.xmax - raw.xmin) / 1000) * rect.w;
-        const ch = ((raw.ymax - raw.ymin) / 1000) * rect.h;
-
-        const rx = rect.x + cx;
-        const ry = rect.y + cy;
-
-        return {
-          id: `region_${Date.now()}_crop_${idx}`,
-          type: raw.type || 'bubble',
-          originalText: raw.originalText || '',
-          translatedText: raw.translatedText || '',
-          x: rx,
-          y: ry,
-          width: cw,
-          height: ch,
-          angle: raw.angle || 0,
-          textColor: raw.textColor || '#000000',
-          strokeColor: raw.strokeColor || 'transparent',
-          strokeWidth: raw.strokeWidth ?? 0,
-          bgColor: img.originalDataUrl ? 'transparent' : (raw.bgColor && raw.bgColor !== 'transparent' ? raw.bgColor : (raw.type === 'bubble' ? '#ffffff' : 'transparent')),
-          fontFamily: raw.fontFamily || (raw.type === 'bubble' ? 'Cairo' : 'Aref Ruqaa'),
-          fontSize: raw.fontSize || Math.max(14, Math.floor(ch / 4.2)),
-          fontWeight: raw.fontWeight || 'normal',
-          fontStyle: raw.fontStyle || 'normal',
-          textAlign: raw.textAlign || 'center',
-          lineHeight: 1.25,
-          autoFitText: true
-        };
-      });
-
-      // Automatically trace contours and center alignment of newly created bubble regions if enabled!
-      if (autoFitAndCenter) {
-        newRegions = await traceRegionsWithBubbleDetection(imgSrc, newRegions);
-      }
-
-      saveHistory(img.id);
-      updateImage(img.id, {
-        regions: [...img.regions, ...newRegions]
-      });
-
-      if (newRegions.length > 0) {
-        setSelectedRegionId(newRegions[0].id);
-      }
-
-      Swal.fire({
-        toast: true,
-        position: 'top-end',
-        icon: 'success',
-        title: 'Translated Successfully!',
-        showConfirmButton: false,
-        timer: 1500,
-        timerProgressBar: true,
-        background: '#120b24',
-        color: '#f8fafc'
-      });
-
-    } catch (err) {
-      console.error("AI Cropped Translate error:", err);
-      Swal.fire({
-        icon: 'error',
-        title: 'Translation Failed',
-        text: 'An error occurred during crop segment translation: ' + (err as Error).message,
-        confirmButtonColor: '#ef4444',
-        background: '#120b24',
-        color: '#f8fafc'
-      });
-    } finally {
-      setIsProcessingCrop(false);
-    }
-  };
-
-  const handleQueueCropSection = async (rect: { x: number, y: number, w: number, h: number }) => {
-    const img = images.find(i => i.id === selectedImageId);
-    if (!img) return;
-
-    try {
-      const imgSrc = img.originalDataUrl || img.dataUrl;
-      const imageObj = new Image();
-      imageObj.src = imgSrc;
-      await new Promise((resolve, reject) => {
-        imageObj.onload = resolve;
-        imageObj.onerror = reject;
-      });
-
-      const canvas = document.createElement('canvas');
-      canvas.width = rect.w;
-      canvas.height = rect.h;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      ctx.drawImage(imageObj, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
-      const croppedBase64DataUrl = canvas.toDataURL('image/jpeg', 0.90);
-
-      const newCrop: CropSelection = {
-        id: `crop_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-        sourceImageId: img.id,
-        imageName: img.filename,
-        x: rect.x,
-        y: rect.y,
-        w: rect.w,
-        h: rect.h,
-        cropUrl: croppedBase64DataUrl
-      };
-
-      setCropsQueue(prev => [...prev, newCrop]);
-
-      Swal.fire({
-        toast: true,
-        position: 'top-end',
-        icon: 'success',
-        title: 'Added to Batch Queue',
-        text: `Segment bounding [${Math.round(rect.w)}x${Math.round(rect.h)}] saved to batch pipeline.`,
-        showConfirmButton: false,
-        timer: 2000,
-        timerProgressBar: true,
-        background: '#120b24',
-        color: '#f8fafc',
-        customClass: {
-          popup: 'backdrop-blur-md bg-purple-950/90 border border-purple-800/80 rounded-xl shadow-2xl'
-        }
-      });
-
-    } catch (e) {
-      console.error("Error cropping section for queue:", e);
-      Swal.fire({
-        icon: 'error',
-        title: 'Crop Segment Error',
-        text: 'Failed to write cropped canvas data: ' + (e as Error).message,
-        confirmButtonColor: '#ef4444',
-        background: '#120b24',
-        color: '#f8fafc'
-      });
-    }
-  };
-
-  const handleTranslateCropQueue = async () => {
-    if (cropsQueue.length === 0) {
-      Swal.fire({
-        icon: 'warning',
-        title: 'Crop Queue is Empty',
-        text: 'Please crop at least one segment first using the Crop tool, then proceed with translation.',
-        confirmButtonColor: '#7c3aed',
-        background: '#120b24',
-        color: '#f8fafc'
-      });
-      return;
-    }
-
-    setIsProcessingCrop(true);
-    try {
-      const loadedImages: { selection: CropSelection; imgElement: HTMLImageElement }[] = [];
-      for (const item of cropsQueue) {
-        const imgObj = new Image();
-        imgObj.src = item.cropUrl;
-        await new Promise((resolve) => {
-          imgObj.onload = resolve;
-          imgObj.onerror = resolve;
-        });
-        loadedImages.push({ selection: item, imgElement: imgObj });
-      }
-
-      const spacing = 30; 
-      const canvasWidth = Math.max(...cropsQueue.map(c => c.w), 800); 
-      let totalStitchedHeight = 0;
-      
-      const renderSpecs = loadedImages.map((lm, idx) => {
-        const item = lm.selection;
-        const scale = canvasWidth / item.w;
-        const renderedH = item.h * scale;
-        const yOffset = totalStitchedHeight;
-        totalStitchedHeight += renderedH + (idx < loadedImages.length - 1 ? spacing : 0);
-        return {
-          ...item,
-          imgElement: lm.imgElement,
-          scale,
-          renderedW: canvasWidth,
-          renderedH,
-          yOffset
-        };
-      });
-
-      const canvas = document.createElement('canvas');
-      canvas.width = canvasWidth;
-      canvas.height = totalStitchedHeight;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        throw new Error("Unable to create stitched canvas");
-      }
-
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvasWidth, totalStitchedHeight);
-
-      renderSpecs.forEach((spec) => {
-        ctx.drawImage(spec.imgElement, 0, spec.yOffset, spec.renderedW, spec.renderedH);
-        ctx.strokeStyle = '#4f46e5';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(0, spec.yOffset, spec.renderedW, spec.renderedH);
-      });
-
-      const stitchedBase64DataUrl = canvas.toDataURL('image/jpeg', 0.88);
-      const key = customApiKey || '';
-
-      const results = await processMangaPages(
-        [{ id: 'stitched-crop', base64Image: stitchedBase64DataUrl, mimeType: 'image/jpeg' }],
-        key,
-        customInstructions,
-        translateJapanese,
-        translateSfx
-      );
-
-      const rawRegions = results[0]?.regions || [];
-      if (rawRegions.length === 0) {
-        Swal.fire({
-          icon: 'info',
-          title: 'No Texts Found',
-          text: 'The Gemini AI model did not detect any text regions in the crop segments.',
-          confirmButtonColor: '#7c3aed',
-          background: '#120b24',
-          color: '#f8fafc'
-        });
-        return;
-      }
-
-      const updatesGroupedByImage: { [imageId: string]: Region[] } = {};
-
-      for (let idx = 0; idx < rawRegions.length; idx++) {
-        const raw = rawRegions[idx];
-
-        const stitchedX = (raw.xmin / 1000) * canvasWidth;
-        const stitchedY = (raw.ymin / 1000) * totalStitchedHeight;
-        const stitchedW = ((raw.xmax - raw.xmin) / 1000) * canvasWidth;
-        const stitchedH = ((raw.ymax - raw.ymin) / 1000) * totalStitchedHeight;
-
-        const centerY = stitchedY + stitchedH / 2;
-        const matchedSpec = renderSpecs.find(spec => centerY >= spec.yOffset && centerY <= (spec.yOffset + spec.renderedH + spacing));
-        if (!matchedSpec) continue; 
-
-        const relYStitched = stitchedY - matchedSpec.yOffset;
-        const relXStitched = stitchedX; 
-
-        const relXOriginalSub = relXStitched / matchedSpec.scale;
-        const relYOriginalSub = relYStitched / matchedSpec.scale;
-        const relWOriginalSub = stitchedW / matchedSpec.scale;
-        const relHOriginalSub = stitchedH / matchedSpec.scale;
-
-        const origX = matchedSpec.x + relXOriginalSub;
-        const origY = matchedSpec.y + relYOriginalSub;
-        const origW = relWOriginalSub;
-        const origH = relHOriginalSub;
-
-        const rId = `region_${Date.now()}_queued_crop_${idx}`;
-        const region: Region = {
-          id: rId,
-          type: raw.type || 'bubble',
-          originalText: raw.originalText || '',
-          translatedText: raw.translatedText || '',
-          x: origX,
-          y: origY,
-          width: origW,
-          height: origH,
-          angle: raw.angle || 0,
-          textColor: raw.textColor || '#000000',
-          strokeColor: raw.strokeColor || 'transparent',
-          strokeWidth: raw.strokeWidth ?? 0,
-          bgColor: 'transparent', 
-          fontFamily: raw.fontFamily || (raw.type === 'bubble' ? 'Cairo' : 'Aref Ruqaa'),
-          fontSize: raw.fontSize || Math.max(14, Math.floor(origH / 4.2)),
-          fontWeight: raw.fontWeight || 'normal',
-          fontStyle: raw.fontStyle || 'normal',
-          textAlign: raw.textAlign || 'center',
-          lineHeight: 1.25,
-          autoFitText: true
-        };
-
-        if (!updatesGroupedByImage[matchedSpec.sourceImageId]) {
-          updatesGroupedByImage[matchedSpec.sourceImageId] = [];
-        }
-        updatesGroupedByImage[matchedSpec.sourceImageId].push(region);
-      }
-
-      let totalAddedCount = 0;
-      for (const [imgId, newRegs] of Object.entries(updatesGroupedByImage)) {
-        const matchingImg = images.find(i => i.id === imgId);
-        if (!matchingImg) continue;
-
-        let finalRegsForImg = newRegs;
-        if (autoFitAndCenter) {
-          finalRegsForImg = await traceRegionsWithBubbleDetection(matchingImg.originalDataUrl || matchingImg.dataUrl, newRegs);
-        }
-
-        saveHistory(imgId);
-        updateImage(imgId, {
-          regions: [...matchingImg.regions, ...finalRegsForImg]
-        });
-        totalAddedCount += finalRegsForImg.length;
-      }
-
-      setCropsQueue([]);
-
-      Swal.fire({
-        icon: 'success',
-        title: 'Batch Translation Complete!',
-        text: `Processed crops and localized ${totalAddedCount} translated text bubbled regions directly on their matching original sheets.`,
-        confirmButtonColor: '#7c3aed',
-        background: '#120b24',
-        color: '#f8fafc'
-      });
-
-    } catch (err) {
-      console.error("Batch Queue translate error:", err);
-      Swal.fire({
-        icon: 'error',
-        title: 'Batch Translation Failed',
-        text: 'An error occurred during multi-crop Gemini API processing: ' + (err as Error).message,
-        confirmButtonColor: '#ef4444',
-        background: '#120b24',
-        color: '#f8fafc'
-      });
-    } finally {
-      setIsProcessingCrop(false);
-    }
-  };
-
-  const handleSmartBubbleFillAll = async (imgId: string) => {
-    const img = images.find(i => i.id === imgId);
-    if (!img) return;
-
-    // Use the whitened/inpainted image dataUrl strictly
-    const imgSrc = img.dataUrl;
-    const imageObj = new Image();
-    imageObj.src = imgSrc;
-    await new Promise(resolve => imageObj.onload = resolve);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = imageObj.width;
-    canvas.height = imageObj.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
-    ctx.drawImage(imageObj, 0, 0);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    
-    const newRegions = [...img.regions];
-    let changed = false;
-
-    for (let i = 0; i < newRegions.length; i++) {
-       const region = newRegions[i];
-       if (region.type === 'bubble') { // ignores SFX completely
-         const startX = Math.floor(region.x + region.width / 2);
-         const startY = Math.floor(region.y + region.height / 2);
-         const result = floodFillBubbleDetailed(imageData, startX, startY, region.width, region.height);
-         if (result) {
-           newRegions[i] = { 
-             ...region, 
-             ...result.safeTextBounds,
-             bubbleContour: result.contour,
-             textAlign: 'center'
-           };
-           changed = true;
-         }
-       }
-    }
-    
-    if (changed) {
-      saveHistory(img.id);
-      updateImage(img.id, { regions: newRegions });
-    } else {
-      alert("No text bubbles were detected for dynamic improvement on this page.");
-    }
-  };
-
-  const generateBubblePreviews = async (imgId: string) => {
-    const img = images.find(i => i.id === imgId);
-    if (!img) return;
-
-    setIsGeneratingPreviews(true);
-    try {
-      // Use the whitened/inpainted image dataUrl strictly
-      const imgSrc = img.dataUrl;
-      const imageObj = new Image();
-      imageObj.src = imgSrc;
-      await new Promise(resolve => imageObj.onload = resolve);
-
-      const canvas = document.createElement('canvas');
-      canvas.width = imageObj.width;
-      canvas.height = imageObj.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      
-      ctx.drawImage(imageObj, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      
-      const previews: any[] = [];
-
-      for (const region of img.regions) {
-        if (region.type === 'bubble') { // ignore SFX regions
-          const startX = Math.floor(region.x + region.width / 2);
-          const startY = Math.floor(region.y + region.height / 2);
-          const result = floodFillBubbleDetailed(imageData, startX, startY, region.width, region.height);
-          if (result) {
-            previews.push({
-              regionId: region.id,
-              contour: result.contour, // exact fluid polygon outline points
-              safeTextBounds: result.safeTextBounds
-            });
-          }
-        }
-      }
-      
-      setBubblePreviews(prev => ({ ...prev, [imgId]: previews }));
-      setShowBubblePreviews(true);
-    } catch (e) {
-      console.error(e);
-      alert("Could not run the automatic bubble preview.");
-    } finally {
-      setIsGeneratingPreviews(false);
-    }
-  };
-
-  const applyBubblePreviews = (imgId: string) => {
-    const list = bubblePreviews[imgId];
-    if (!list || list.length === 0) return;
-    
-    saveHistory(imgId);
-    setImages(prev => prev.map(img => {
-      if (img.id !== imgId) return img;
-      return {
-        ...img,
-        regions: img.regions.map(region => {
-          const preview = list.find(p => p.regionId === region.id);
-          if (preview) {
-            return {
-              ...region,
-              ...preview.safeTextBounds,
-              bubbleContour: preview.contour,
-              textAlign: 'center'
-            };
-          }
-          return region;
-        })
-      };
-    }));
-    
-    setShowBubblePreviews(false);
   };
 
   const toggleSelectForProcess = (id: string, e: React.MouseEvent) => {
@@ -1829,7 +1238,7 @@ export default function App() {
         Swal.fire({
           icon: 'success',
           text: 'The manga series was deleted successfully!',
-          confirmButtonColor: '#7c3aed',
+          confirmButtonColor: '#2563eb',
           background: '#120b24',
           color: '#f8fafc'
         });
@@ -1865,7 +1274,7 @@ export default function App() {
         Swal.fire({
           icon: 'success',
           text: 'The volume was deleted successfully!',
-          confirmButtonColor: '#7c3aed',
+          confirmButtonColor: '#2563eb',
           background: '#120b24',
           color: '#f8fafc'
         });
@@ -1907,7 +1316,7 @@ export default function App() {
         Swal.fire({
           icon: 'success',
           text: 'The translated chapter was deleted successfully!',
-          confirmButtonColor: '#7c3aed',
+          confirmButtonColor: '#2563eb',
           background: '#120b24',
           color: '#f8fafc'
         });
@@ -1924,7 +1333,7 @@ export default function App() {
       showCancelButton: true,
       confirmButtonText: 'Add Volume',
       cancelButtonText: 'Cancel',
-      confirmButtonColor: '#7c3aed',
+      confirmButtonColor: '#2563eb',
       background: '#120b24',
       color: '#f8fafc',
       inputValidator: (value) => {
@@ -1951,7 +1360,7 @@ export default function App() {
         Swal.fire({
           icon: 'success',
           text: `Volume ${value} added successfully!`,
-          confirmButtonColor: '#7c3aed',
+          confirmButtonColor: '#2563eb',
           background: '#120b24',
           color: '#f8fafc'
         });
@@ -1968,7 +1377,7 @@ export default function App() {
       showCancelButton: true,
       confirmButtonText: 'Create Chapter',
       cancelButtonText: 'Cancel',
-      confirmButtonColor: '#7c3aed',
+      confirmButtonColor: '#2563eb',
       background: '#120b24',
       color: '#f8fafc',
       inputValidator: (value) => {
@@ -2012,7 +1421,7 @@ export default function App() {
         Swal.fire({
           icon: 'warning',
           text: 'Please choose an image smaller than 2 MB to keep performance fast.',
-          confirmButtonColor: '#7c3aed',
+          confirmButtonColor: '#2563eb',
           background: '#120b24',
           color: '#f8fafc'
         });
@@ -2033,7 +1442,7 @@ export default function App() {
       Swal.fire({
         icon: 'error',
         text: 'You must enter a manga/manhwa title to get started!',
-        confirmButtonColor: '#7c3aed',
+        confirmButtonColor: '#2563eb',
         background: '#120b24',
         color: '#f8fafc'
       });
@@ -2061,7 +1470,7 @@ export default function App() {
     Swal.fire({
       icon: 'success',
       text: 'The new series was added to your library successfully! Click on it now to create volumes and chapters.',
-      confirmButtonColor: '#7c3aed',
+      confirmButtonColor: '#2563eb',
       background: '#120b24',
       color: '#f8fafc'
     });
@@ -2148,38 +1557,6 @@ export default function App() {
     }
   };
 
-  const importTranslationRef = useRef<HTMLInputElement>(null);
-
-  const handleExportTranslation = () => {
-    if (images.length === 0) return;
-    const docText = createTranslationDoc(images);
-    const blob = new Blob([docText], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `Translation_Doc.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleImportTranslation = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const text = event.target?.result as string;
-        const newImages = parseTranslationDoc(text, images);
-        setImages(newImages);
-        alert("Translation imported successfully!");
-      } catch (err) {
-        console.error(err);
-        alert("Failed to parse translation file. Ensure the file has not been corrupted and metadata is intact.");
-      }
-    };
-    reader.readAsText(file);
-  };
-
   const handleDownloadCurrentPage = async () => {
     const imgToDownload = selectedImage || images[0];
     if (!imgToDownload) return;
@@ -2196,12 +1573,10 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-gradient-to-tr from-[#02000a] via-[#0d091a] to-[#0a0514] dynamic-bg text-slate-200 overflow-hidden font-sans">
-      <TopBar onOpenSettings={() => setShowSettingsPage(true)} />
-
       {exportProgress && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm">
-          <div className="liquid-glass rounded-3xl p-8 flex flex-col items-center gap-4 max-w-md w-full shadow-[0_20px_50px_rgba(168,85,247,0.35)] border border-purple-500/35 animate-fade-in">
-            <Loader2 size={48} className="animate-spin text-purple-400" />
+          <div className="liquid-glass rounded-3xl p-8 flex flex-col items-center gap-4 max-w-md w-full shadow-[0_20px_50px_rgba(56, 189, 248,0.35)] border border-sky-500/35 animate-fade-in">
+            <Loader2 size={48} className="animate-spin text-sky-400" />
             <h2 className="text-xl font-display font-bold text-white tracking-tight">Exporting High Quality ZIP</h2>
             <p className="text-sm text-slate-400 text-center font-mono">{exportProgress}</p>
           </div>
@@ -2209,267 +1584,97 @@ export default function App() {
       )}
       {/* Topbar */}
       {activeNavigationTab === 'library' && activeChapterId !== null && (
-        <header className="h-16 border-b border-purple-500/10 flex items-center justify-between px-6 bg-black/40 backdrop-blur-md shrink-0">
-          <div className="flex items-center gap-6">
+        <header className="h-16 border-b border-sky-500/10 flex items-center justify-between px-3 sm:px-6 bg-black/40 backdrop-blur-md shrink-0 gap-3 overflow-x-auto">
+          <div className="flex items-center gap-3 sm:gap-6 shrink-0">
             <button
               onClick={() => {
                 setActiveChapterId(null);
                 setImages([]);
                 setSelectedImageId(null);
               }}
-              className="flex items-center gap-2 bg-purple-950/45 hover:bg-purple-900 border border-purple-500/35 text-purple-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold font-display transition-all"
+              className="flex items-center gap-2 bg-blue-950/45 hover:bg-blue-900 border border-sky-500/35 text-sky-300 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold font-display transition-all"
             >
               ← Back to Library
             </button>
-            <div className="flex items-center gap-3">
-              <TypeIcon className="text-purple-400" />
+            <div className="hidden sm:flex items-center gap-3">
+              <TypeIcon className="text-sky-400" />
               <h1 className="font-display font-bold text-xl tracking-tight text-white leading-none">MangaAI Studio</h1>
             </div>
-            
-            <div className="relative">
-             <button 
-               onClick={() => setShowSettingsModal(true)}
-               className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-colors border ${customApiKey ? 'bg-emerald-950/40 border-emerald-800 text-emerald-400' : 'bg-[#111] border-[#444] text-slate-300'}`}
-             >
-               <Settings size={14} />
-               Settings
-             </button>
           </div>
-        </div>
-        
-        {showSettingsModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 text-left">
-          <div className="liquid-glass rounded-3xl w-full max-w-md shadow-[0_20px_50px_rgba(168,85,247,0.3)] border border-purple-500/25 flex flex-col max-h-[90vh]">
-            <div className="flex justify-between items-center p-5 border-b border-purple-500/10">
-              <h2 className="text-lg font-display font-bold text-white flex items-center gap-2">
-                <span className="text-purple-400">✧</span> Application Settings
-              </h2>
-              <button 
-                onClick={() => setShowSettingsModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-md transition-colors"
-              >
-                ✕
-              </button>
-            </div>
-            
-            <div className="p-5 overflow-y-auto flex flex-col gap-6">
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium text-slate-300 font-display">
-                    Gemini API Keys (One per line)
-                  </span>
-                  {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length > 0 && (
-                    <span className="text-[11px] bg-purple-950/40 border border-purple-800 text-purple-400 px-2 py-0.5 rounded-full font-mono">
-                      {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length} Keys
-                    </span>
-                  )}
-                </div>
-                <textarea 
-                  value={customApiKey}
-                  onChange={handleApiKeyChange}
-                  placeholder="Enter your Gemini API key(s)..."
-                  className="w-full h-24 bg-black/60 border border-purple-500/15 rounded-md p-2 text-xs outline-none focus:border-purple-500 font-mono text-slate-200 resize-none"
-                />
-                <div className="space-y-1 text-[10px] text-slate-500 leading-relaxed font-mono">
-                  <p>✔ Enter multiple API keys to enable concurrent parallel translation across multiple page streams.</p>
-                  <p>✔ Keeps rate limits healthy by routing requests across keys dynamically.</p>
-                  <p>✔ External usage outside of the AI Studio preview environment requires a valid personal Gemini API Key.</p>
-                </div>
-              </div>
 
-              <div className="space-y-2">
-                <label className="flex flex-col text-sm font-medium text-slate-300">
-                  Cleaned ZIP Match Mode
-                  <select 
-                    value={zipMatchMode}
-                    onChange={(e) => handleSetZipMatchMode(e.target.value as 'filename' | 'index')}
-                    className="w-full bg-black border border-[#444] rounded-md p-2 mt-1 text-sm outline-none focus:border-indigo-500 font-normal text-slate-200"
-                  >
-                    <option value="filename">Match by Filename (Recommended)</option>
-                    <option value="index">Match by Order (Index)</option>
-                  </select>
-                </label>
-                <p className="text-[10px] text-slate-500">How to map uploaded cleaned images to the original ones.</p>
-              </div>
-
-              <div className="space-y-2">
-                <label className="flex flex-col text-sm font-medium text-slate-300">
-                  Custom AI Instructions
-                  <textarea 
-                    value={customInstructions}
-                    onChange={handleCustomInstructionsChange}
-                    placeholder="E.g., Translate the text specifically using Egyptian dialect."
-                    className="w-full bg-black border border-[#444] rounded-md p-2 mt-1 text-sm outline-none focus:border-indigo-500 font-normal h-20 resize-y"
-                  />
-                </label>
-                <p className="text-[10px] text-slate-500">Custom instructions supplied to the translation agent.</p>
-              </div>
-
-              <div className="flex flex-col gap-4">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={translateJapanese} 
-                    onChange={(e) => handleSetTranslateJapanese(e.target.checked)}
-                    className="w-4 h-4 rounded border-[#444] bg-black text-indigo-600 focus:ring-indigo-500 focus:ring-offset-black"
-                  />
-                  <span className="text-sm font-medium text-slate-300">Translate text from Japanese</span>
-                </label>
-
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={translateSfx} 
-                    onChange={(e) => handleSetTranslateSfx(e.target.checked)}
-                    className="w-4 h-4 rounded border-[#444] bg-black text-indigo-600 focus:ring-indigo-500 focus:ring-offset-black"
-                  />
-                  <span className="text-sm font-medium text-slate-300">Analyze and translate SFX</span>
-                </label>
-
-                <label className="flex items-center gap-3 cursor-pointer border-t border-slate-800/60 pt-3">
-                  <input 
-                    type="checkbox" 
-                    checked={autoFitAndCenter} 
-                    onChange={(e) => handleSetAutoFitAndCenter(e.target.checked)}
-                    className="w-4 h-4 rounded border-[#444] bg-black text-indigo-600 focus:ring-indigo-500 focus:ring-offset-black"
-                  />
-                  <span className="text-sm font-medium text-slate-300 flex flex-col">
-                    <span>Auto Flood Fill & Alignment</span>
-                    <span className="text-[10px] text-slate-500 font-normal">Automatically align text and expand bounds to fit speech bubbles safely</span>
-                  </span>
-                </label>
-
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={compressBeforeProcessing} 
-                    onChange={(e) => handleSetCompressBeforeProcessing(e.target.checked)}
-                    className="w-4 h-4 rounded border-[#444] bg-[#111] text-indigo-600 focus:ring-indigo-500 focus:ring-offset-black"
-                  />
-                  <span className="text-sm font-medium text-slate-300 flex flex-col">
-                    <span>Compress Large Images</span>
-                    <span className="text-[10px] text-slate-500 font-normal">Pre-compress page images to boost Gemini AI analytical processing speeds</span>
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-[#333] flex justify-end">
-              <button 
-                onClick={() => setShowSettingsModal(false)}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer"
-              >
-                Close Settings
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      
-        <div className="flex items-center gap-4 z-10">
-           <div className="flex bg-[#111] rounded-md p-1">
-            <input 
-              type="file" 
-              accept=".zip" 
-              className="hidden" 
+        <div className="flex items-center gap-3 z-10 shrink-0">
+          <div className="relative">
+            <input
+              type="file"
+              accept=".zip"
+              className="hidden"
               ref={fileInputRef}
               onChange={handleZipUpload}
             />
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 hover:bg-[#222] px-3 py-1.5 rounded text-sm transition-colors text-slate-300"
-              title="Import ZIP"
-            >
-              <Upload size={16} /> Import ZIP
-            </button>
-
-            <div className="w-px bg-slate-700 mx-1 my-1"></div>
-
-            <input 
-              type="file" 
-              accept=".zip" 
-              className="hidden" 
+            <input
+              type="file"
+              accept=".zip"
+              className="hidden"
               ref={cleanZipInputRef}
               onChange={handleCleanedZipUpload}
             />
-            <button 
-              onClick={() => cleanZipInputRef.current?.click()}
-              className="flex items-center gap-2 hover:bg-[#222] px-3 py-1.5 rounded text-sm transition-colors text-slate-300"
-              title="Upload Cleaned ZIP"
-            >
-              <Sparkles size={16} /> Cleaned ZIP
-            </button>
-
-            <div className="w-px bg-slate-700 mx-1 my-1"></div>
-
-            <input 
-              type="file" 
+            <input
+              type="file"
               accept="image/*"
               multiple
-              className="hidden" 
+              className="hidden"
               ref={appendImagesInputRef}
               onChange={handleAppendImages}
             />
-            <button 
-              onClick={() => appendImagesInputRef.current?.click()}
-              className="flex items-center gap-2 hover:bg-[#222] px-3 py-1.5 rounded text-sm transition-colors text-slate-300"
-              title="Add Images"
+            <button
+              onClick={() => setShowManagePages(v => !v)}
+              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300"
+              title="Manage Pages"
             >
-              <ImagePlus size={16} /> Add Images
+              <ImagePlus size={16} /> <span className="hidden sm:inline">Manage Pages</span>
             </button>
-
-            <div className="w-px bg-slate-700 mx-1 my-1"></div>
-
-            <input 
-              type="file" 
-              accept=".json" 
-              className="hidden" 
-              ref={projectInputRef}
-              onChange={handleLoadProject}
-            />
-            <button 
-              onClick={() => projectInputRef.current?.click()}
-              className="flex items-center gap-1.5 hover:bg-[#222] px-3 py-1.5 rounded text-sm transition-colors text-slate-300"
-              title="Load Project"
-            >
-              Load State
-            </button>
-            <button 
-              onClick={handleSaveProject}
-              disabled={images.length === 0}
-              className="flex items-center gap-1.5 hover:bg-[#222] disabled:opacity-50 px-3 py-1.5 rounded text-sm transition-colors text-slate-300"
-              title="Save Project"
-            >
-              <Save size={16} /> Save State
-            </button>
+            {showManagePages && (
+              <div className="absolute right-0 top-full mt-2 w-56 liquid-glass rounded-xl border border-sky-500/25 shadow-2xl z-50 flex flex-col p-1.5 gap-0.5">
+                <button
+                  onClick={() => { fileInputRef.current?.click(); setShowManagePages(false); }}
+                  className="flex items-center gap-2 hover:bg-[#222] px-3 py-2 rounded-md text-sm transition-colors text-slate-300 text-left"
+                >
+                  <Upload size={16} /> Import ZIP
+                </button>
+                <button
+                  onClick={() => { cleanZipInputRef.current?.click(); setShowManagePages(false); }}
+                  className="flex items-center gap-2 hover:bg-[#222] px-3 py-2 rounded-md text-sm transition-colors text-slate-300 text-left"
+                >
+                  <Sparkles size={16} /> Cleaned ZIP
+                </button>
+                <button
+                  onClick={() => { appendImagesInputRef.current?.click(); setShowManagePages(false); }}
+                  className="flex items-center gap-2 hover:bg-[#222] px-3 py-2 rounded-md text-sm transition-colors text-slate-300 text-left"
+                >
+                  <ImagePlus size={16} /> Add Images
+                </button>
+              </div>
+            )}
           </div>
-          
-          <button 
+
+          <button
             onClick={processAllImages}
             disabled={images.length === 0 || isProcessingAll}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/50 disabled:cursor-not-allowed px-4 py-2 rounded-md font-medium text-sm transition-colors"
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-4 py-2 rounded-md font-medium text-sm transition-colors"
           >
             {isProcessingAll ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-            Process All
+            <span className="hidden sm:inline">Process All</span>
           </button>
-          
-          <button 
+
+          <button
             onClick={() => setShowOriginal(!showOriginal)}
             className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium text-sm transition-colors border ${showOriginal ? 'bg-amber-600 border-amber-600 text-white' : 'bg-[#111] border-[#444] text-slate-300 hover:bg-[#222]'}`}
           >
             {showOriginal ? 'Showing Original' : 'View Original'}
           </button>
-          
-          <button 
-            onClick={() => setShowText(!showText)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium text-sm transition-colors border ${!showText ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-[#111] border-[#444] text-slate-300 hover:bg-[#222]'}`}
-          >
-            <TypeIcon size={16} />
-            {showText ? 'Hide Texts' : 'Show Texts'}
-          </button>
-          
+
           <div className="flex bg-emerald-700/50 rounded-md overflow-hidden border border-emerald-600/30">
-            <button 
+            <button
               onClick={handleExportZip}
               disabled={images.length === 0}
               className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors border-r border-emerald-500/20"
@@ -2477,45 +1682,22 @@ export default function App() {
             >
               <Download size={16} /> ZIP
             </button>
-            <button 
+            <button
               onClick={handleExportPsd}
               disabled={images.length === 0}
-              className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors border-r border-purple-500/20"
+              className="flex items-center gap-2 bg-blue-600 hover:bg-sky-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors border-r border-sky-500/20"
               title="Export PSD package for Photoshop (Photoshop Layout Layers Archive)"
             >
-              <Download size={16} className="text-purple-200" /> New PSD
+              <Download size={16} className="text-sky-200" /> New PSD
             </button>
-            <button 
+            <button
               onClick={handleExportPdf}
               disabled={images.length === 0}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors border-r border-emerald-500/20"
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors"
               title="Export as paginated PDF"
             >
               PDF
             </button>
-            <button 
-              onClick={handleExportTranslation}
-              disabled={images.length === 0}
-              className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:bg-[#111] disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors border-r border-slate-600"
-              title="Export text document for external translation"
-            >
-              Export Docs
-            </button>
-            <button 
-              onClick={() => importTranslationRef.current?.click()}
-              disabled={images.length === 0}
-              className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:bg-[#111] disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors"
-              title="Import translated text document"
-            >
-              Import Docs
-            </button>
-            <input 
-              type="file" 
-              ref={importTranslationRef} 
-              onChange={handleImportTranslation} 
-              accept=".txt" 
-              className="hidden" 
-            />
           </div>
         </div>
       </header>
@@ -2525,7 +1707,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         {showSettingsPage && (
           <div className="flex-1 flex flex-col p-8 bg-gradient-to-tr from-[#03010c] via-[#0b0718] to-black relative overflow-y-auto pb-32">
-            <div className="absolute top-10 right-10 w-96 h-96 bg-purple-600/5 rounded-full blur-[140px] pointer-events-none" />
+            <div className="absolute top-10 right-10 w-96 h-96 bg-blue-600/5 rounded-full blur-[140px] pointer-events-none" />
             <div className="max-w-5xl mx-auto w-full flex flex-col gap-8 relative z-10">
               <div className="flex items-start justify-between">
                 <div>
@@ -2545,11 +1727,11 @@ export default function App() {
                 {/* Left Config Panel */}
                 <div className="md:col-span-2 space-y-6">
                   {/* API Key Box */}
-                  <div className="liquid-glass p-6 rounded-2xl border border-purple-500/15 space-y-4">
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
                     <div className="flex justify-between items-center">
                       <h3 className="text-base font-semibold text-white font-display">Gemini API Credentials</h3>
                       {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length > 0 && (
-                        <span className="text-[11px] bg-purple-950/40 border border-purple-800 text-purple-400 px-2.5 py-0.5 rounded-full font-mono">
+                        <span className="text-[11px] bg-blue-950/40 border border-blue-800 text-sky-400 px-2.5 py-0.5 rounded-full font-mono">
                           {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length} Key(s) Loaded
                         </span>
                       )}
@@ -2558,7 +1740,7 @@ export default function App() {
                       value={customApiKey}
                       onChange={handleApiKeyChange}
                       placeholder="Add keys (one key per line or comma-separated)..."
-                      className="w-full h-28 bg-black/60 border border-purple-500/15 rounded-xl p-3 text-sm outline-none focus:border-purple-500 text-slate-200 resize-none font-mono focus:ring-1 focus:ring-purple-500/20"
+                      className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-mono focus:ring-1 focus:ring-sky-500/20"
                     />
                     <div className="space-y-1.5 text-[11px] text-slate-400 leading-relaxed font-mono">
                       <p>✧ Speed tip: Rotating several keys shares requests seamlessly to avoid rate limits safely.</p>
@@ -2567,13 +1749,13 @@ export default function App() {
                   </div>
 
                   {/* Instructions Box */}
-                  <div className="liquid-glass p-6 rounded-2xl border border-purple-500/15 space-y-4">
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
                     <h3 className="text-base font-semibold text-white font-display">Custom Agent Prompting</h3>
                     <textarea 
                       value={customInstructions}
                       onChange={handleCustomInstructionsChange}
                       placeholder="E.g., Translate to Egyptian dialect, keep humor puns, keep sound effects minimal, etc."
-                      className="w-full h-28 bg-black/60 border border-purple-500/15 rounded-xl p-3 text-sm outline-none focus:border-purple-500 text-slate-200 resize-none font-sans focus:ring-1 focus:ring-purple-500/20"
+                      className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-sans focus:ring-1 focus:ring-sky-500/20"
                     />
                     <p className="text-[11px] text-slate-400 font-mono">
                       ✧ Custom instructions are passed directly to the Gemini neural vision matrix during page synthesis.
@@ -2583,7 +1765,7 @@ export default function App() {
 
                 {/* Right Toggle Rules */}
                 <div className="space-y-6">
-                  <div className="liquid-glass p-6 rounded-2xl border border-purple-500/15 space-y-5">
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-5">
                     <h3 className="text-base font-semibold text-white font-display">Optimization Rules</h3>
                     
                     <div className="space-y-4">
@@ -2593,10 +1775,10 @@ export default function App() {
                           type="checkbox" 
                           checked={translateJapanese} 
                           onChange={(e) => handleSetTranslateJapanese(e.target.checked)}
-                          className="w-4 h-4 mt-0.5 rounded border-purple-500/20 bg-black text-purple-600 focus:ring-purple-500"
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
                         />
                         <span className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-200 group-hover:text-purple-300 transition-colors">Translate Japanese Content</span>
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Translate Japanese Content</span>
                           <span className="text-[10px] text-slate-500 mt-0.5">Optimizes neural model parameters for Japanese language OCR streams.</span>
                         </span>
                       </label>
@@ -2606,10 +1788,10 @@ export default function App() {
                           type="checkbox" 
                           checked={translateSfx} 
                           onChange={(e) => handleSetTranslateSfx(e.target.checked)}
-                          className="w-4 h-4 mt-0.5 rounded border-purple-500/20 bg-black text-purple-600 focus:ring-purple-500"
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
                         />
                         <span className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-200 group-hover:text-purple-300 transition-colors">Translate Comic SFX</span>
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Translate Comic SFX</span>
                           <span className="text-[10px] text-slate-500 mt-0.5">Translate small action sound effects alongside text blocks.</span>
                         </span>
                       </label>
@@ -2619,10 +1801,10 @@ export default function App() {
                           type="checkbox" 
                           checked={autoFitAndCenter} 
                           onChange={(e) => handleSetAutoFitAndCenter(e.target.checked)}
-                          className="w-4 h-4 mt-0.5 rounded border-purple-500/20 bg-black text-purple-600 focus:ring-purple-500"
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
                         />
                         <span className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-200 group-hover:text-purple-300 transition-colors">Auto Bubble Fit & Center</span>
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Auto Bubble Fit & Center</span>
                           <span className="text-[10px] text-slate-500 mt-0.5">Automatically calculates text bounds to match speech balloon radii.</span>
                         </span>
                       </label>
@@ -2632,22 +1814,22 @@ export default function App() {
                           type="checkbox" 
                           checked={compressBeforeProcessing} 
                           onChange={(e) => handleSetCompressBeforeProcessing(e.target.checked)}
-                          className="w-4 h-4 mt-0.5 rounded border-purple-500/20 bg-black text-purple-600 focus:ring-purple-500"
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
                         />
                         <span className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-200 group-hover:text-purple-300 transition-colors">Pre-Compress Plate Images</span>
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Pre-Compress Plate Images</span>
                           <span className="text-[10px] text-slate-500 mt-0.5">Reduces page sizes to achieve 3.5x faster analytical cycle times.</span>
                         </span>
                       </label>
                     </div>
                   </div>
 
-                  <div className="liquid-glass p-6 rounded-2xl border border-purple-500/15 space-y-3">
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-3">
                     <h4 className="text-sm font-semibold text-slate-200">Plates Mapping Mode</h4>
                     <select 
                       value={zipMatchMode}
                       onChange={(e) => handleSetZipMatchMode(e.target.value as 'filename' | 'index')}
-                      className="w-full bg-black/60 border border-purple-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20 outline-none"
+                      className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 outline-none"
                     >
                       <option value="filename">Match by Filename (Recommended)</option>
                       <option value="index">Match by Order Index</option>
@@ -2661,22 +1843,30 @@ export default function App() {
 
         {activeNavigationTab === 'library' && activeChapterId === null && (
           <div className="flex-1 flex flex-col p-8 bg-gradient-to-tr from-[#03010c] via-[#090615] to-black relative overflow-y-auto pb-32">
-            <div className="absolute top-10 right-10 w-96 h-96 bg-purple-600/5 rounded-full blur-[140px] pointer-events-none" />
-            <div className="absolute bottom-10 left-10 w-96 h-96 bg-indigo-650/5 rounded-full blur-[140px] pointer-events-none" />
+            <button
+              onClick={() => setShowSettingsPage(true)}
+              className="fixed top-4 right-4 z-50 p-2.5 rounded-full liquid-glass border border-sky-500/25 text-slate-300 hover:text-white transition-all"
+              title="Settings"
+              aria-label="Open Settings"
+            >
+              <Settings size={18} />
+            </button>
+            <div className="absolute top-10 right-10 w-96 h-96 bg-blue-600/5 rounded-full blur-[140px] pointer-events-none" />
+            <div className="absolute bottom-10 left-10 w-96 h-96 bg-blue-650/5 rounded-full blur-[140px] pointer-events-none" />
 
             <div className="max-w-6xl mx-auto w-full flex flex-col gap-8 relative z-10">
               
               {/* BREADCRUMBS & ACTION HEADER */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-purple-500/10 pb-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-sky-500/10 pb-6">
                 <div>
-                  <div className="flex items-center gap-2 text-xs font-mono text-purple-350 mb-2">
+                  <div className="flex items-center gap-2 text-xs font-mono text-sky-350 mb-2">
                     <span className="font-semibold select-none">Library (Library)</span>
                     {activeMangaId && (
                       <>
                         <span>/</span>
                         <button 
                           onClick={() => { setActiveMangaId(null); setActiveVolumeId(null); }}
-                          className="hover:text-white transition-all underline decoration-purple-500/50"
+                          className="hover:text-white transition-all underline decoration-sky-500/50"
                         >
                           {mangas.find(m => m.id === activeMangaId)?.title}
                         </button>
@@ -2687,7 +1877,7 @@ export default function App() {
                         <span>/</span>
                         <button 
                           onClick={() => setActiveVolumeId(null)}
-                          className="hover:text-white transition-all underline decoration-purple-500/50"
+                          className="hover:text-white transition-all underline decoration-sky-500/50"
                         >
                           {mangas.find(m => m.id === activeMangaId)?.volumes.find(v => v.id === activeVolumeId)?.name}
                         </button>
@@ -2714,9 +1904,19 @@ export default function App() {
                 <div className="flex items-center gap-2.5">
                   {!activeMangaId && (
                     <>
+                      <div className="relative">
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input
+                          type="text"
+                          value={librarySearchQuery}
+                          onChange={(e) => setLibrarySearchQuery(e.target.value)}
+                          placeholder="Search series..."
+                          className="bg-black/60 border border-sky-500/15 hover:border-sky-500/30 focus:border-sky-500 rounded-xl pl-8 pr-3 py-2.5 text-xs text-white outline-none transition-all w-40 sm:w-56"
+                        />
+                      </div>
                       <button
                         onClick={() => setShowCreateSeriesModal(true)}
-                        className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-2.5 px-5 rounded-xl transition-all cursor-pointer text-xs shadow-md"
+                        className="bg-gradient-to-r from-blue-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold py-2.5 px-5 rounded-xl transition-all cursor-pointer text-xs shadow-md"
                       >
                         + New Manga
                       </button>
@@ -2726,13 +1926,13 @@ export default function App() {
                     <>
                       <button 
                         onClick={() => { setActiveMangaId(null); }}
-                        className="bg-black/60 border border-purple-500/15 hover:border-purple-500/40 text-slate-350 font-bold py-2.5 px-4 rounded-xl transition-all text-xs"
+                        className="bg-black/60 border border-sky-500/15 hover:border-sky-500/40 text-slate-350 font-bold py-2.5 px-4 rounded-xl transition-all text-xs"
                       >
                         ← Back to All
                       </button>
                       <button 
                         onClick={handleAddVolumePrompt}
-                        className="bg-purple-600 hover:bg-purple-550 text-white font-bold py-2.5 px-5 rounded-xl transition-all text-xs cursor-pointer shadow-md shadow-purple-950/45"
+                        className="bg-blue-600 hover:bg-sky-550 text-white font-bold py-2.5 px-5 rounded-xl transition-all text-xs cursor-pointer shadow-md shadow-blue-950/45"
                       >
                         + Add New Volume
                       </button>
@@ -2742,12 +1942,12 @@ export default function App() {
                     <>
                       <button 
                         onClick={() => { setActiveVolumeId(null); }}
-                        className="bg-black/60 border border-purple-500/15 hover:border-purple-500/40 text-slate-350 font-bold py-2.5 px-4 rounded-xl transition-all text-xs"
+                        className="bg-black/60 border border-sky-500/15 hover:border-sky-500/40 text-slate-350 font-bold py-2.5 px-4 rounded-xl transition-all text-xs"
                       >
                         ← Volumes
                       </button>
                       <label 
-                        className="bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/30 text-purple-300 font-bold py-2.5 px-5 rounded-xl transition-all text-xs cursor-pointer flex items-center justify-center gap-2"
+                        className="bg-blue-600/20 hover:bg-blue-600/40 border border-sky-500/30 text-sky-300 font-bold py-2.5 px-5 rounded-xl transition-all text-xs cursor-pointer flex items-center justify-center gap-2"
                       >
                         <Upload size={14} /> Upload Volume as Chapter
                         <input 
@@ -2825,7 +2025,7 @@ export default function App() {
                       </label>
                       <button 
                         onClick={handleAddChapterPrompt}
-                        className="bg-indigo-600 hover:bg-indigo-550 text-white font-bold py-2.5 px-5 rounded-xl transition-all text-xs cursor-pointer shadow-md shadow-indigo-950/45"
+                        className="bg-blue-600 hover:bg-blue-550 text-white font-bold py-2.5 px-5 rounded-xl transition-all text-xs cursor-pointer shadow-md shadow-blue-950/45"
                       >
                         + Add Chapter Empty
                       </button>
@@ -2839,7 +2039,7 @@ export default function App() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   {mangas.length === 0 ? (
                     <div className="col-span-full py-16 text-center">
-                      <div className="w-16 h-16 bg-purple-950/20 border border-purple-500/20 rounded-2xl flex items-center justify-center text-purple-400 mx-auto mb-4">
+                      <div className="w-16 h-16 bg-blue-950/20 border border-sky-500/20 rounded-2xl flex items-center justify-center text-sky-400 mx-auto mb-4">
                         <ImageIcon size={28} />
                       </div>
                       <h3 className="text-lg font-bold text-slate-200">No manga series yet</h3>
@@ -2848,19 +2048,23 @@ export default function App() {
                       </p>
                       <button
                         onClick={() => setShowCreateSeriesModal(true)}
-                        className="mt-5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
+                        className="mt-5 bg-gradient-to-r from-blue-600 to-blue-600 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
                       >
                         + Create New Manga (Create New)
                       </button>
                     </div>
+                  ) : filteredMangas.length === 0 ? (
+                    <div className="col-span-full py-16 text-center">
+                      <p className="text-sm text-slate-400">No series match "{librarySearchQuery}".</p>
+                    </div>
                   ) : (
-                    mangas.map(manga => {
+                    filteredMangas.map(manga => {
                       const totalChaptersCount = manga.volumes.reduce((acc, v) => acc + v.chapters.length, 0);
                       return (
                         <div 
                           key={manga.id}
                           onClick={() => setActiveMangaId(manga.id)}
-                          className="relative aspect-[3/4] rounded-2xl overflow-hidden group shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-purple-500/10 hover:border-purple-500/35 transition-all duration-300 cursor-pointer flex flex-col justify-end bg-[#05020c]"
+                          className="relative aspect-[3/4] rounded-2xl overflow-hidden group shadow-[0_8px_30px_rgb(0,0,0,0.12)] border border-sky-500/10 hover:border-sky-500/35 transition-all duration-300 cursor-pointer flex flex-col justify-end bg-[#05020c]"
                         >
                           {/* Cover Image/Gradient Representation */}
                           {manga.coverUrl ? (
@@ -2872,13 +2076,13 @@ export default function App() {
                             />
                           ) : (
                             <div className="absolute inset-0 bg-gradient-to-tr from-[#120731] via-[#09041a] to-black flex flex-col items-center justify-center p-6 text-center">
-                              <Sparkles className="w-10 h-10 text-purple-500/60 animate-pulse mb-3" />
-                              <span className="text-xs text-purple-400/85 tracking-widest uppercase font-mono font-bold leading-none">{manga.type}</span>
+                              <Sparkles className="w-10 h-10 text-sky-500/60 animate-pulse mb-3" />
+                              <span className="text-xs text-sky-400/85 tracking-widest uppercase font-mono font-bold leading-none">{manga.type}</span>
                             </div>
                           )}
                           
                           {/* Type Badge top-left */}
-                          <span className={`absolute top-4 left-4 text-[9px] font-bold px-2.5 py-1 rounded-md uppercase tracking-wider z-20 ${manga.type === 'manhwa' ? 'bg-indigo-600 border border-indigo-400 text-white' : 'bg-amber-600 border border-amber-400 text-white'}`}>
+                          <span className={`absolute top-4 left-4 text-[9px] font-bold px-2.5 py-1 rounded-md uppercase tracking-wider z-20 ${manga.type === 'manhwa' ? 'bg-blue-600 border border-sky-400 text-white' : 'bg-amber-600 border border-amber-400 text-white'}`}>
                             {manga.type}
                           </span>
 
@@ -2895,11 +2099,11 @@ export default function App() {
                           </button>
 
                           {/* Lower Liquid Glass layer - overlay cover bottom */}
-                          <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/60 backdrop-blur-md border-t border-purple-500/15 flex flex-col gap-1 transition-all group-hover:bg-[#110729]/85 z-10 text-left">
-                            <span className="text-[10px] text-purple-400 tracking-wider uppercase font-mono font-bold">{manga.type}</span>
+                          <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/60 backdrop-blur-md border-t border-sky-500/15 flex flex-col gap-1 transition-all group-hover:bg-[#110729]/85 z-10 text-left">
+                            <span className="text-[10px] text-sky-400 tracking-wider uppercase font-mono font-bold">{manga.type}</span>
                             <h3 className="text-base font-display font-bold text-white tracking-tight truncate leading-tight">{manga.title}</h3>
                             <p className="text-[11px] text-slate-350 leading-normal line-clamp-2 h-8 font-sans">{manga.description || 'No custom description has been written for this series yet.'}</p>
-                            <div className="flex items-center justify-between text-[10px] text-purple-300 font-mono mt-1 w-full pt-2 border-t border-purple-500/10">
+                            <div className="flex items-center justify-between text-[10px] text-sky-300 font-mono mt-1 w-full pt-2 border-t border-sky-500/10">
                               <span>📚 Volumes: {manga.volumes.length}</span>
                               <span>📖 Chapters: {totalChaptersCount}</span>
                             </div>
@@ -2920,7 +2124,7 @@ export default function App() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                       {currentManga.volumes.length === 0 ? (
                         <div className="col-span-full py-16 text-center">
-                          <div className="w-16 h-16 bg-purple-950/20 border border-purple-500/20 rounded-2xl flex items-center justify-center text-purple-400 mx-auto mb-4">
+                          <div className="w-16 h-16 bg-blue-950/20 border border-sky-500/20 rounded-2xl flex items-center justify-center text-sky-400 mx-auto mb-4">
                             <Plus size={28} />
                           </div>
                           <h3 className="text-lg font-bold text-slate-200">No volumes yet</h3>
@@ -2929,7 +2133,7 @@ export default function App() {
                           </p>
                           <button
                             onClick={handleAddVolumePrompt}
-                            className="mt-5 bg-purple-600 hover:bg-purple-550 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
+                            className="mt-5 bg-blue-600 hover:bg-sky-550 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
                           >
                             + Add First Volume (Create Volume)
                           </button>
@@ -2939,7 +2143,7 @@ export default function App() {
                           <div 
                             key={vol.id}
                             onClick={() => setActiveVolumeId(vol.id)}
-                            className="relative aspect-[3/4] bg-gradient-to-tr from-[#12072f] via-[#09041a] to-black rounded-2xl overflow-hidden border border-purple-500/10 hover:border-purple-500/35 transition-all duration-300 cursor-pointer flex flex-col justify-end p-6 group text-left"
+                            className="relative aspect-[3/4] bg-gradient-to-tr from-[#12072f] via-[#09041a] to-black rounded-2xl overflow-hidden border border-sky-500/10 hover:border-sky-500/35 transition-all duration-300 cursor-pointer flex flex-col justify-end p-6 group text-left"
                           >
                             {/* Inherited Cover backdrop or pattern */}
                             {currentManga.coverUrl && (
@@ -2965,7 +2169,7 @@ export default function App() {
                                   Swal.close();
                                 }
                               }}
-                              className="absolute top-4 left-4 bg-purple-950/80 hover:bg-purple-700 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md border border-purple-500/20"
+                              className="absolute top-4 left-4 bg-blue-950/80 hover:bg-blue-700 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md border border-sky-500/20"
                               title="Download all volume chapters as ZIP"
                             >
                               <Download size={13} />
@@ -2986,15 +2190,15 @@ export default function App() {
                             <div className="absolute inset-0 bg-radial-gradient from-transparent to-black pointer-events-none" />
 
                             {/* Bottom Liquid Glass display inside the Volume Card */}
-                            <div className="absolute bottom-0 left-0 right-0 p-5 bg-black/80 backdrop-blur-md border-t border-purple-500/15 flex flex-col gap-1.5 transition-all group-hover:bg-[#110729]/95 z-10 text-left">
-                              <span className="text-[10px] text-purple-400 tracking-wider font-mono font-bold">VOLUME CONTAINER</span>
-                              <h3 className="text-xl font-display font-bold text-purple-300 tracking-tight leading-none mb-1">{vol.name}</h3>
+                            <div className="absolute bottom-0 left-0 right-0 p-5 bg-black/80 backdrop-blur-md border-t border-sky-500/15 flex flex-col gap-1.5 transition-all group-hover:bg-[#110729]/95 z-10 text-left">
+                              <span className="text-[10px] text-sky-400 tracking-wider font-mono font-bold">VOLUME CONTAINER</span>
+                              <h3 className="text-xl font-display font-bold text-sky-300 tracking-tight leading-none mb-1">{vol.name}</h3>
                               <p className="text-xs text-slate-350 line-clamp-2 h-8 font-sans leading-relaxed text-left">
                                 {vol.chapters.length > 0 
                                   ? `Contains: ${vol.chapters.map(c => c.name).join(', ')}`
                                   : 'This volume is currently empty. Click to add new translation chapters inside it.'}
                               </p>
-                              <div className="flex justify-between items-center text-[10px] text-slate-400 font-mono mt-1 pt-2 border-t border-purple-500/10 w-full">
+                              <div className="flex justify-between items-center text-[10px] text-slate-400 font-mono mt-1 pt-2 border-t border-sky-500/10 w-full">
                                 <span>📖 Chapters: {vol.chapters.length} </span>
                                 <span className="text-emerald-500 font-bold font-mono">✔ Active</span>
                               </div>
@@ -3017,7 +2221,7 @@ export default function App() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                       {currentVolume.chapters.length === 0 ? (
                         <div className="col-span-full py-16 text-center">
-                          <div className="w-16 h-16 bg-purple-950/20 border border-purple-500/20 rounded-2xl flex items-center justify-center text-purple-400 mx-auto mb-4">
+                          <div className="w-16 h-16 bg-blue-950/20 border border-sky-500/20 rounded-2xl flex items-center justify-center text-sky-400 mx-auto mb-4">
                             <Plus size={28} />
                           </div>
                           <h3 className="text-lg font-bold text-slate-200">No chapters yet</h3>
@@ -3026,7 +2230,7 @@ export default function App() {
                           </p>
                           <button
                             onClick={handleAddChapterPrompt}
-                            className="mt-5 bg-indigo-600 hover:bg-indigo-550 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
+                            className="mt-5 bg-blue-600 hover:bg-blue-550 text-white font-bold text-xs py-2.5 px-6 rounded-xl transition-all"
                           >
                             + Add New Chapter for Translation (Add Chapter)
                           </button>
@@ -3038,7 +2242,7 @@ export default function App() {
                             <div 
                               key={chap.id}
                               onClick={() => handleOpenChapter(chap)}
-                              className="relative aspect-[3/4] bg-gradient-to-tr from-[#0b0424] via-[#050212] to-black rounded-2xl overflow-hidden border border-purple-500/10 hover:border-purple-500/35 transition-all duration-300 cursor-pointer flex flex-col justify-end p-6 group text-left"
+                              className="relative aspect-[3/4] bg-gradient-to-tr from-[#0b0424] via-[#050212] to-black rounded-2xl overflow-hidden border border-sky-500/10 hover:border-sky-500/35 transition-all duration-300 cursor-pointer flex flex-col justify-end p-6 group text-left"
                             >
                               {coverPage ? (
                                 <img 
@@ -3069,7 +2273,7 @@ export default function App() {
                                     Swal.close();
                                   }
                                 }}
-                                className="absolute top-4 left-4 bg-purple-950/85 hover:bg-purple-750 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md border border-purple-500/20"
+                                className="absolute top-4 left-4 bg-blue-950/85 hover:bg-blue-750 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all z-20 shadow-md border border-sky-500/20"
                                 title="Download all chapter images as ZIP"
                               >
                                 <Download size={13} />
@@ -3088,13 +2292,13 @@ export default function App() {
                               </button>
 
                               {/* Bottom Liquid Glass display inside the Chapter Card */}
-                              <div className="absolute bottom-0 left-0 right-0 p-5 bg-black/85 backdrop-blur-md border-t border-purple-500/15 flex flex-col gap-1 transition-all group-hover:bg-[#120733]/90 z-10 text-left">
-                                <span className="text-[10px] text-indigo-400 tracking-wider font-mono font-bold">MANGA CHAPTER</span>
+                              <div className="absolute bottom-0 left-0 right-0 p-5 bg-black/85 backdrop-blur-md border-t border-sky-500/15 flex flex-col gap-1 transition-all group-hover:bg-[#120733]/90 z-10 text-left">
+                                <span className="text-[10px] text-sky-400 tracking-wider font-mono font-bold">MANGA CHAPTER</span>
                                 <h3 className="text-base font-display font-bold text-white tracking-tight leading-none mb-1">{chap.name}</h3>
                                 <p className="text-[11px] text-slate-350 leading-normal line-clamp-1 font-sans">
                                   {chap.images.length > 0 ? `Contains ${chap.images.length} prepared pages.` : 'Chapter is empty. Click to enter and upload images.'}
                                 </p>
-                                <div className="flex justify-between items-center text-[10px] text-indigo-300 font-mono mt-1.5 pt-1.5 border-t border-purple-500/10 w-full">
+                                <div className="flex justify-between items-center text-[10px] text-sky-300 font-mono mt-1.5 pt-1.5 border-t border-sky-500/10 w-full">
                                   <span>🚀 Open in Studio</span>
                                   <span>{chap.images.length} Pages</span>
                                 </div>
@@ -3114,11 +2318,11 @@ export default function App() {
         {activeNavigationTab === 'library' && activeChapterId !== null && images.length === 0 && (
           <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#04020a] relative">
             {/* Ambient spotlights */}
-            <div className="absolute top-1/4 left-1/3 w-80 h-80 bg-purple-650/5 rounded-full blur-[140px] pointer-events-none" />
-            <div className="absolute bottom-1/4 right-1/3 w-80 h-80 bg-indigo-650/5 rounded-full blur-[140px] pointer-events-none" />
+            <div className="absolute top-1/4 left-1/3 w-80 h-80 bg-sky-650/5 rounded-full blur-[140px] pointer-events-none" />
+            <div className="absolute bottom-1/4 right-1/3 w-80 h-80 bg-blue-650/5 rounded-full blur-[140px] pointer-events-none" />
             
-            <div className="liquid-glass p-12 rounded-3xl max-w-xl w-full flex flex-col items-center gap-6 shadow-[0_15px_40px_rgba(168,85,247,0.2)] text-slate-200 text-center border border-purple-500/15 relative z-10">
-              <div className="w-20 h-20 bg-purple-950/20 rounded-2xl border border-purple-500/25 flex items-center justify-center text-purple-400 shadow-inner">
+            <div className="liquid-glass p-12 rounded-3xl max-w-xl w-full flex flex-col items-center gap-6 shadow-[0_15px_40px_rgba(56, 189, 248,0.2)] text-slate-200 text-center border border-sky-500/15 relative z-10">
+              <div className="w-20 h-20 bg-blue-950/20 rounded-2xl border border-sky-500/25 flex items-center justify-center text-sky-400 shadow-inner">
                 <svg className="w-10 h-10 animate-bounce" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                   <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
                   <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
@@ -3133,7 +2337,7 @@ export default function App() {
               <div className="flex flex-col sm:flex-row items-center gap-3 w-full mt-2">
                 <button
                   onClick={() => setShowCreateProjectModal(true)}
-                  className="w-full sm:w-auto flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-3.5 px-6 rounded-xl shadow-lg shadow-purple-950/30 transition-all active:scale-95 cursor-pointer text-sm"
+                  className="w-full sm:w-auto flex-1 bg-gradient-to-r from-blue-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold py-3.5 px-6 rounded-xl shadow-lg shadow-blue-950/30 transition-all active:scale-95 cursor-pointer text-sm"
                 >
                   + Upload Images
                 </button>
@@ -3145,9 +2349,36 @@ export default function App() {
         {activeNavigationTab === 'library' && activeChapterId !== null && images.length > 0 && (
           <>
             {/* Left Sidebar (Thumbnails) */}
-            <aside className="w-64 border-r border-purple-500/10 bg-black/30 backdrop-blur-md flex flex-col overflow-y-auto glass-noise">
+            <aside className="w-16 sm:w-48 md:w-64 shrink-0 border-r border-sky-500/10 bg-black/30 backdrop-blur-md flex flex-col overflow-y-auto glass-noise transition-all">
+              <div className="flex items-center justify-center gap-2 p-2 border-b border-[#333]/50 shrink-0">
+                <button
+                  onClick={() => {
+                    const idx = images.findIndex(i => i.id === selectedImageId);
+                    if (idx > 0) setSelectedImageId(images[idx - 1].id);
+                  }}
+                  disabled={images.findIndex(i => i.id === selectedImageId) <= 0}
+                  className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed bg-[#111] hover:bg-[#222]"
+                  title="Previous Page"
+                >
+                  <ChevronUp size={16} />
+                </button>
+                <span className="hidden sm:inline text-[10px] text-slate-500 font-mono">
+                  {images.length > 0 ? `${Math.max(0, images.findIndex(i => i.id === selectedImageId)) + 1}/${images.length}` : '-'}
+                </span>
+                <button
+                  onClick={() => {
+                    const idx = images.findIndex(i => i.id === selectedImageId);
+                    if (idx >= 0 && idx < images.length - 1) setSelectedImageId(images[idx + 1].id);
+                  }}
+                  disabled={images.findIndex(i => i.id === selectedImageId) === -1 || images.findIndex(i => i.id === selectedImageId) >= images.length - 1}
+                  className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed bg-[#111] hover:bg-[#222]"
+                  title="Next Page"
+                >
+                  <ChevronDown size={16} />
+                </button>
+              </div>
               {images.length === 0 && (
-                <div className="p-8 text-center text-slate-500 text-sm">
+                <div className="p-8 text-center text-slate-500 text-sm hidden sm:block">
                   Upload a ZIP file to get started.
                 </div>
               )}
@@ -3164,7 +2395,7 @@ export default function App() {
                 <img src={img.dataUrl} alt={img.filename} loading="lazy" className={`${img.originalDataUrl ? 'w-1/2' : 'w-full'} h-full object-cover opacity-80`} />
                 {img.status === 'processing' && (
                   <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                    <Loader2 className="animate-spin text-indigo-400" />
+                    <Loader2 className="animate-spin text-sky-400" />
                   </div>
                 )}
                 {img.status === 'done' && (
@@ -3179,7 +2410,7 @@ export default function App() {
                       type="checkbox"
                       checked={selectedForProcess.has(img.id)}
                       onChange={(e) => toggleSelectForProcess(img.id, e as any)}
-                      className="w-4 h-4 rounded border-[#444] bg-[#111] text-indigo-600 focus:ring-indigo-500"
+                      className="w-4 h-4 rounded border-[#444] bg-[#111] text-blue-600 focus:ring-blue-500"
                       title="Select for batch processing (Max 5)"
                     />
                   </div>
@@ -3217,7 +2448,7 @@ export default function App() {
         </aside>
 
         {/* Editor Area */}
-        <main className="flex-1 p-6 flex flex-col items-center justify-center relative overflow-hidden">
+        <main className="flex-1 min-w-0 p-2 sm:p-4 md:p-6 flex flex-col items-center justify-center relative overflow-hidden">
           {selectedImage ? (
             <div className="w-full h-full flex flex-col gap-4">
               <div className="flex justify-between items-center shrink-0">
@@ -3225,85 +2456,51 @@ export default function App() {
                   <h2 className="font-medium text-slate-300 text-sm max-w-[200px] truncate">{selectedImage.filename}</h2>
                   <button
                     onClick={() => setShowExternalAIModal(true)}
-                    className="flex items-center gap-1.5 bg-[#090615] hover:bg-[#130d2a] border border-purple-500/30 text-purple-200 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-[0_4px_12px_rgba(168,85,247,0.15)]"
+                    className="flex items-center gap-1.5 bg-[#090615] hover:bg-[#130d2a] border border-sky-500/30 text-sky-200 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-[0_4px_12px_rgba(56, 189, 248,0.15)]"
                     title="Load and submit translation via external AI assistant"
                   >
-                    <Sparkles size={13} className="text-purple-300 animate-bounce" /> External AI Cocktail ✦
+                    <Sparkles size={13} className="text-sky-300 animate-bounce" /> External AI Cocktail ✦
                   </button>
                   
                   {/* Tool selection */}
                   <div className="flex bg-black rounded-lg p-1 border border-[#333] ml-4">
                     <button 
                       onClick={() => setActiveTool('select')}
-                      className={`p-1.5 rounded-md ${activeTool === 'select' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                      className={`p-1.5 rounded-md ${activeTool === 'select' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
                       title="Select/Move"
                     >
                       <MousePointer2 size={16} />
                     </button>
                     <button 
                       onClick={() => setActiveTool('draw')}
-                      className={`p-1.5 rounded-md ${activeTool === 'draw' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                      className={`p-1.5 rounded-md ${activeTool === 'draw' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
                       title="Draw"
                     >
                       <Brush size={16} />
                     </button>
                     <button 
                       onClick={() => setActiveTool('erase')}
-                      className={`p-1.5 rounded-md ${activeTool === 'erase' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                      className={`p-1.5 rounded-md ${activeTool === 'erase' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
                       title="Erase (White Brush)"
                     >
                       <Eraser size={16} />
                     </button>
-                    <button 
-                      onClick={() => setActiveTool('fill_poly')}
-                      className={`p-1.5 rounded-md ${activeTool === 'fill_poly' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                      title="Fill Polygon (4 points)"
-                    >
-                      <Palette size={16} />
-                    </button>
-                    <button 
-                      onClick={() => setActiveTool('bg_erase')}
-                      className={`p-1.5 rounded-md ${activeTool === 'bg_erase' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                      title="Remove Text Box Background"
-                    >
-                      <Scissors size={16} />
-                    </button>
-                    <button 
-                      onClick={() => setActiveTool('smart_sfx')}
-                      className={`p-1.5 rounded-md ${activeTool === 'smart_sfx' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                      title="Smart Auto-Color (SFX Whitening)"
-                    >
-                      <Sparkles size={16} />
-                     </button>
-                     <button 
-                      onClick={() => setActiveTool('gen_erase')}
-                      className={`p-1.5 rounded-md ${activeTool === 'gen_erase' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                      title="AI Generative Inpaint (Smart Whitening)"
-                    >
-                      <Wand2 size={16} />
-                    </button>
-                    <button 
-                      onClick={() => setActiveTool('crop')}
-                      className={`p-1.5 rounded-md ${activeTool === 'crop' ? 'bg-indigo-600 text-white font-bold' : 'text-slate-400 hover:text-slate-200 hover:text-indigo-300'}`}
-                      title="Crop a section for translation (AI Crop & Translate Panel)"
-                    >
-                      <Scissors size={16} className="-rotate-90 text-indigo-400" />
-                    </button>
-                    <button 
-                      onClick={() => setActiveTool('scribble_bubble')}
-                      className={`p-1.5 rounded-md ${activeTool === 'scribble_bubble' ? 'bg-indigo-600 text-white' : 'text-purple-400 hover:text-purple-300 hover:bg-purple-950/20'}`}
-                      title="Select bubble with smart scribble (Scribble Bubble)"
-                    >
-                      <PenTool size={16} />
-                    </button>
                     <div className="w-px bg-slate-700 mx-1 my-1"></div>
-                    <button 
+                    <button
                       onClick={() => undo(selectedImage.id)}
                       disabled={!(selectedImage.history && selectedImage.history.length > 0)}
                       className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Undo Action"
                     >
                       <Undo size={16} />
+                    </button>
+                    <button
+                      onClick={() => redo(selectedImage.id)}
+                      disabled={!(selectedImage.redoHistory && selectedImage.redoHistory.length > 0)}
+                      className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Redo Action"
+                    >
+                      <Redo size={16} />
                     </button>
                   </div>
 
@@ -3320,63 +2517,9 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Manhwa Mode Toggle */}
-                  <button
-                    onClick={() => {
-                      const next = !manhwaMode;
-                      setManhwaMode(next);
-                      localStorage.setItem('manhwa_mode', String(next));
-                    }}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border transition-all ${manhwaMode ? 'bg-[#7c3aed]/20 border-[#7c3aed] text-[#a78bfa] shadow-lg font-bold' : 'bg-[#111] border-[#333] text-slate-400 hover:text-slate-200 hover:bg-[#1f1f1f]'}`}
-                    title="Adapt layout height to render stacked long strip Manhwa webtoons with scrolling support"
-                  >
-                    <span className="relative flex h-2 w-2">
-                      {manhwaMode && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#a78bfa] opacity-75"></span>}
-                      <span className={`relative inline flex rounded-full h-2 w-2 ${manhwaMode ? 'bg-purple-400' : 'bg-slate-500'}`}></span>
-                    </span>
-                    Manhwa Mode
-                  </button>
-                  
                   {selectedImage.status !== 'processing' && (
                     <div className="flex items-center gap-2 ml-4 animate-fade-in">
-                      {isGeneratingPreviews ? (
-                        <div className="flex items-center gap-1.5 bg-blue-950/40 border border-blue-800 text-blue-400 px-3 py-1.5 rounded text-xs font-medium">
-                          <Loader2 size={12} className="animate-spin" /> Detecting bubble boxes...
-                        </div>
-                      ) : showBubblePreviews ? (
-                        <div className="flex items-center gap-1.5 bg-blue-950/30 border border-blue-900 px-2 py-1 rounded">
-                          <button
-                            onClick={() => applyBubblePreviews(selectedImage.id)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded font-medium transition-colors"
-                            title="Apply the safe centered alignment to all detected bubbles"
-                          >
-                            Apply Centering
-                          </button>
-                          <button
-                            onClick={() => setShowBubblePreviews(false)}
-                            className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3 py-1 rounded font-medium transition-colors"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <button 
-                          onClick={() => generateBubblePreviews(selectedImage.id)}
-                          className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors"
-                          title="Generate interactive bounds previews highlighted in blue to inspect before alignment"
-                        >
-                          <Wand2 size={14} /> Preview Bounds
-                        </button>
-                      )}
-                      
-                      <button 
-                        onClick={() => handleSmartBubbleFillAll(selectedImage.id)}
-                        className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded text-xs font-medium transition-colors text-white"
-                        title="Smart Center All Text Bubbles"
-                      >
-                        <Wand2 size={14} /> Center All Bubbles
-                      </button>
-                      <button 
+                      <button
                         onClick={handleDownloadCurrentPage}
                         className="flex items-center gap-1.5 bg-[#111] hover:bg-[#222] px-3 py-1.5 rounded text-xs font-medium transition-colors"
                         title="Download this page as PNG"
@@ -3440,7 +2583,7 @@ export default function App() {
                             processImage(selectedImage);
                           }
                         }}
-                        className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded text-xs font-medium transition-colors"
+                        className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded text-xs font-medium transition-colors"
                       >
                         <Play size={14} /> {selectedForProcess.size > 0 ? `Process Selected (${selectedForProcess.size})` : 'Process Image'}
                       </button>
@@ -3448,15 +2591,6 @@ export default function App() {
                   )}
                 </div>
               </div>
-              {isProcessingCrop && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-                  <div className="bg-black border border-[#444] rounded-xl p-8 flex flex-col items-center gap-4 max-w-sm w-full shadow-2xl animate-fade-in text-center">
-                    <Loader2 size={42} className="animate-spin text-indigo-500" />
-                    <h3 className="text-sm font-bold text-white tracking-tight">Translating and Processing Manga with AI...</h3>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">Gemini is now analyzing, cleaning, and aligning the cropped section automatically, matching it to the full image with high precision.</p>
-                  </div>
-                </div>
-              )}
               <Suspense fallback={<div className="w-full h-full flex items-center justify-center text-slate-500"><Loader2 className="animate-spin mr-2"/> Loading Editor...</div>}>
                 <ImageEditor
                   image={selectedImage}
@@ -3469,68 +2603,14 @@ export default function App() {
                   brushColor={brushColor}
                   zoom={zoom}
                   showOriginal={showOriginal}
-                  showText={showText}
                   onAddStroke={(stroke) => {
                     saveHistory(selectedImage.id);
                     updateImage(selectedImage.id, {
                       paintStrokes: [...selectedImage.paintStrokes, stroke]
                     });
                   }}
-                  onGenerateInpaint={async (base64) => generateInpaint(base64, selectedImage.mimeType, customApiKey)}
-                  bubblePreviews={bubblePreviews[selectedImage.id] || []}
-                  showBubblePreviews={showBubblePreviews && !showOriginal}
-                  manhwaMode={manhwaMode}
-                  onProcessCropSection={handleProcessCropSection}
-                  onQueueCropSection={handleQueueCropSection}
-                  onScribbleBubble={handleScribbleBubble}
                 />
               </Suspense>
-
-              {cropsQueue.length > 0 && (
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[90%] max-w-2xl bg-black/85 backdrop-blur-xl border border-purple-500/30 rounded-2xl shadow-[0_10px_30px_rgba(147,51,234,0.3)] p-3.5 z-40 flex items-center justify-between gap-4 animate-fade-in">
-                  <div className="flex flex-col gap-1 max-w-[45%]">
-                    <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5 leading-none">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                      AI Batch Crop Queue ({cropsQueue.length} segments)
-                    </span>
-                    <span className="text-[10px] text-slate-400 leading-tight">
-                      Selected segments will be stitched together, translated at once, and mapped back to their original coordinates.
-                    </span>
-                  </div>
-                  
-                  <div className="flex items-center gap-2 overflow-x-auto max-w-[35%] py-1 border-x border-slate-800/80 px-3 scrollbar-none">
-                    {cropsQueue.map((crop) => (
-                      <div key={crop.id} className="relative group shrink-0 w-11 h-11 rounded bg-black/50 border border-slate-700/60 overflow-hidden shadow-md">
-                        <img src={crop.cropUrl} className="w-full h-full object-cover" />
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setCropsQueue(prev => prev.filter(c => c.id !== crop.id));
-                          }}
-                          className="absolute top-0 right-0 bg-red-600 hover:bg-red-500 text-white p-0.5 rounded-bl opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center w-4.5 h-4.5 text-[9px] font-bold"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => setCropsQueue([])}
-                      className="text-xs text-slate-400 hover:text-slate-200 px-2 py-1.5 rounded transition-all cursor-pointer font-medium"
-                    >
-                      Clear
-                    </button>
-                    <button
-                      onClick={handleTranslateCropQueue}
-                      className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-lg transition-all active:scale-95 cursor-pointer"
-                    >
-                      <Sparkles size={12} className="text-white shrink-0 animate-pulse" /> Batch Translation
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           ) : (
             <div className="text-slate-500 flex flex-col items-center gap-4">
@@ -3540,8 +2620,23 @@ export default function App() {
           )}
         </main>
 
+        {/* Toggle button for right properties panel on small viewports */}
+        <button
+          onClick={() => setShowRightPanel(v => !v)}
+          className="md:hidden fixed bottom-24 right-4 z-40 p-3 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg"
+          title="Toggle Properties Panel"
+        >
+          <Settings size={18} />
+        </button>
+        {showRightPanel && (
+          <div
+            className="fixed inset-0 bg-black/60 z-30 md:hidden"
+            onClick={() => setShowRightPanel(false)}
+          />
+        )}
+
         {/* Right Sidebar (Properties) */}
-        <aside className="w-80 border-l border-[#333] bg-black flex flex-col overflow-y-auto">
+        <aside className={`fixed inset-y-0 right-0 z-40 w-80 max-w-[85vw] transform transition-transform duration-300 ${showRightPanel ? 'translate-x-0' : 'translate-x-full'} md:translate-x-0 md:static md:z-auto md:w-80 border-l border-[#333] bg-black flex flex-col overflow-y-auto`}>
           {selectedImage && selectedRegion ? (
             <div className="p-5 flex flex-col gap-6">
               <div>
@@ -3567,7 +2662,7 @@ export default function App() {
                 <textarea
                   value={selectedRegion.translatedText}
                   onChange={(e) => updateRegion(selectedRegion.id, { translatedText: e.target.value })}
-                  className="w-full h-24 bg-black border border-[#444] rounded-md p-3 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none"
+                  className="w-full h-24 bg-black border border-[#444] rounded-md p-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-none"
                   dir="ltr"
                 />
               </div>
@@ -3576,10 +2671,10 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5 col-span-2">
                     <div className="flex justify-between items-center">
-                      <label className="text-xs font-semibold text-purple-300">Font Used (Font Family)</label>
+                      <label className="text-xs font-semibold text-sky-300">Font Used (Font Family)</label>
                       <button 
                         onClick={() => fontInputRef.current?.click()}
-                        className="text-[10px] text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1 font-sans bg-purple-950/20 px-1.5 py-0.5 rounded border border-purple-800/30"
+                        className="text-[10px] text-sky-400 hover:text-sky-300 transition-colors flex items-center gap-1 font-sans bg-blue-950/20 px-1.5 py-0.5 rounded border border-blue-800/30"
                         title="Upload a custom font (.ttf, .otf, .zip)"
                       >
                         <Plus size={10} /> Upload Custom Fonts
@@ -3608,17 +2703,17 @@ export default function App() {
                     </select>
 
                     {/* Highly Elegant Visual Font Live Preview List */}
-                    <div className="bg-[#0b0718]/80 border border-purple-900/30 rounded-xl p-2.5 mt-2 max-h-40 overflow-y-auto space-y-1.5 scrollbar-thin">
-                      <p className="text-[10px] text-slate-400 font-sans tracking-tight mb-2 border-b border-purple-900/20 pb-1 flex justify-between">
+                    <div className="bg-[#0b0718]/80 border border-blue-900/30 rounded-xl p-2.5 mt-2 max-h-40 overflow-y-auto space-y-1.5 scrollbar-thin">
+                      <p className="text-[10px] text-slate-400 font-sans tracking-tight mb-2 border-b border-blue-900/20 pb-1 flex justify-between">
                         <span>Live font preview list</span>
-                        <span className="text-purple-400">Font name in its own look ✦</span>
+                        <span className="text-sky-400">Font name in its own look ✦</span>
                       </p>
                       {customFonts.concat(["Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "Almarai", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Reem Kufi", "Rakkas"]).map((font) => (
                         <button
                           key={font}
                           onClick={() => updateRegion(selectedRegion.id, { fontFamily: font })}
                           style={{ fontFamily: font }}
-                          className={`w-full text-left hover:bg-purple-950/40 p-2 rounded-lg text-xs transition-all flex justify-between items-center ${selectedRegion.fontFamily === font ? 'bg-purple-950/60 text-purple-300 border border-purple-700/50' : 'text-slate-300'}`}
+                          className={`w-full text-left hover:bg-blue-950/40 p-2 rounded-lg text-xs transition-all flex justify-between items-center ${selectedRegion.fontFamily === font ? 'bg-blue-950/60 text-sky-300 border border-blue-700/50' : 'text-slate-300'}`}
                         >
                           <span className="text-[9px] text-slate-500 font-mono select-none">{font.replace('MET-', '')}</span>
                           <span className="text-sm tracking-wide truncate max-w-[70%] text-left font-semibold">Styling: Manga {font.replace('MET-', '')}</span>
@@ -3653,8 +2748,8 @@ export default function App() {
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-slate-400">Style</label>
                     <div className="flex gap-2">
-                       <button onClick={() => updateRegion(selectedRegion.id, { fontWeight: selectedRegion.fontWeight === 'bold' ? 'normal' : 'bold' })} className={`flex-1 p-2 border rounded-md text-sm font-bold ${selectedRegion.fontWeight === 'bold' ? 'bg-indigo-600 border-indigo-600' : 'bg-black border-[#444]'}`}>B</button>
-                       <button onClick={() => updateRegion(selectedRegion.id, { fontStyle: selectedRegion.fontStyle === 'italic' ? 'normal' : 'italic' })} className={`flex-1 p-2 border rounded-md text-sm italic ${selectedRegion.fontStyle === 'italic' ? 'bg-indigo-600 border-indigo-600' : 'bg-black border-[#444]'}`}>I</button>
+                       <button onClick={() => updateRegion(selectedRegion.id, { fontWeight: selectedRegion.fontWeight === 'bold' ? 'normal' : 'bold' })} className={`flex-1 p-2 border rounded-md text-sm font-bold ${selectedRegion.fontWeight === 'bold' ? 'bg-blue-600 border-blue-600' : 'bg-black border-[#444]'}`}>B</button>
+                       <button onClick={() => updateRegion(selectedRegion.id, { fontStyle: selectedRegion.fontStyle === 'italic' ? 'normal' : 'italic' })} className={`flex-1 p-2 border rounded-md text-sm italic ${selectedRegion.fontStyle === 'italic' ? 'bg-blue-600 border-blue-600' : 'bg-black border-[#444]'}`}>I</button>
                     </div>
                   </div>
                 </div>
@@ -3699,7 +2794,7 @@ export default function App() {
                             if (val === 0) updateRegion(selectedRegion.id, { strokeColor: 'transparent', strokeWidth: 0 });
                             else updateRegion(selectedRegion.id, { strokeColor: selectedRegion.strokeColor === 'transparent' ? '#ffffff' : selectedRegion.strokeColor, strokeWidth: val });
                           }}
-                          className="w-full accent-indigo-500"
+                          className="w-full accent-blue-500"
                         />
                         <span className="text-xs font-mono">{selectedRegion.strokeColor === 'transparent' ? 0 : selectedRegion.strokeWidth}</span>
                       </div>
@@ -3750,7 +2845,7 @@ export default function App() {
                       max="180"
                       value={Math.round(selectedRegion.angle)}
                       onChange={(e) => updateRegion(selectedRegion.id, { angle: Number(e.target.value) })}
-                      className="flex-1 accent-indigo-500"
+                      className="flex-1 accent-blue-500"
                     />
                     <span className="text-xs w-8 text-left font-mono">{Math.round(selectedRegion.angle)}°</span>
                   </div>
@@ -3767,7 +2862,7 @@ export default function App() {
                         step="0.5"
                         value={selectedRegion.letterSpacing || 0}
                         onChange={(e) => updateRegion(selectedRegion.id, { letterSpacing: Number(e.target.value) })}
-                        className="flex-1 accent-indigo-500"
+                        className="flex-1 accent-blue-500"
                       />
                       <span className="text-xs w-6 text-left font-mono">{selectedRegion.letterSpacing || 0}</span>
                     </div>
@@ -3782,7 +2877,7 @@ export default function App() {
                         step="0.05"
                         value={selectedRegion.opacity ?? 1}
                         onChange={(e) => updateRegion(selectedRegion.id, { opacity: Number(e.target.value) })}
-                        className="flex-1 accent-indigo-500"
+                        className="flex-1 accent-blue-500"
                       />
                       <span className="text-xs w-8 text-left font-mono">{Math.round((selectedRegion.opacity ?? 1) * 100)}%</span>
                     </div>
@@ -3796,7 +2891,7 @@ export default function App() {
                         type="checkbox" 
                         checked={!!selectedRegion.autoFitText} 
                         onChange={(e) => updateRegion(selectedRegion.id, { autoFitText: e.target.checked })}
-                        className="rounded border-[#444] bg-black accent-indigo-500"
+                        className="rounded border-[#444] bg-black accent-blue-500"
                       />
                       Auto-fit Text
                     </label>
@@ -3818,7 +2913,7 @@ export default function App() {
                       max="20"
                       value={selectedRegion.shadowBlur || 0}
                       onChange={(e) => updateRegion(selectedRegion.id, { shadowBlur: Number(e.target.value) })}
-                      className="w-full accent-indigo-500"
+                      className="w-full accent-blue-500"
                     />
                   </div>
                 </div>
@@ -3872,7 +2967,7 @@ export default function App() {
                       max="180"
                       value={selectedRegion.angle || 0}
                       onChange={(e) => updateRegion(selectedRegion.id, { angle: Number(e.target.value) })}
-                      className="w-full accent-indigo-500"
+                      className="w-full accent-blue-500"
                     />
                   </div>
                 </div>
@@ -3914,13 +3009,13 @@ export default function App() {
                 <div className="pt-4 border-t border-[#333] space-y-3 mt-4">
                   <div className="flex gap-2">
                     <button 
-                      className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-xs py-2 rounded transition-colors flex items-center justify-center gap-2 font-medium"
+                      className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded transition-colors flex items-center justify-center gap-2 font-medium"
                       onClick={() => handleSmartBubbleFill(selectedImage.id, selectedRegion)}
                     >
                       <Wand2 size={14} /> Smart Detect
                     </button>
                     <button 
-                      className="bg-purple-900/60 hover:bg-purple-800 text-purple-200 border border-purple-800/50 text-xs py-2 px-3 rounded transition-colors flex items-center justify-center gap-1.5"
+                      className="bg-blue-900/60 hover:bg-blue-800 text-sky-200 border border-blue-800/50 text-xs py-2 px-3 rounded transition-colors flex items-center justify-center gap-1.5"
                       onClick={handleSplitBubble}
                       title="Geometric split of two merged circular bubbles"
                     >
@@ -3929,15 +3024,15 @@ export default function App() {
                   </div>
 
                   {/* Kashida layouts */}
-                  <div className="bg-purple-950/10 p-2 text-left rounded-lg border border-purple-900/20 space-y-1.5">
-                    <label className="text-[10px] font-semibold text-purple-300 flex items-center justify-between">
+                  <div className="bg-blue-950/10 p-2 text-left rounded-lg border border-blue-900/20 space-y-1.5">
+                    <label className="text-[10px] font-semibold text-sky-300 flex items-center justify-between">
                       <span>Line-extension kashida (Kashida)</span>
                       <span>✦</span>
                     </label>
                     <div className="flex gap-2">
                       <button 
                         onClick={() => applyKashidaHarmony('oval')}
-                        className="flex-1 bg-purple-950/30 hover:bg-purple-900/55 border border-purple-800/40 text-[9px] py-1 px-1.5 rounded transition-all text-slate-200 font-sans"
+                        className="flex-1 bg-blue-950/30 hover:bg-blue-900/55 border border-blue-800/40 text-[9px] py-1 px-1.5 rounded transition-all text-slate-200 font-sans"
                         title="Extend text to fit circular shape at the center"
                       >
                         Circular Kashida (ـ)
@@ -4031,11 +3126,11 @@ export default function App() {
                         max="100"
                         value={brushSize}
                         onChange={(e) => setBrushSize(Number(e.target.value))}
-                        className="w-full accent-indigo-500"
+                        className="w-full accent-blue-500"
                       />
                     </div>
                     
-                    {(activeTool === 'draw' || activeTool === 'fill_poly') && (
+                    {activeTool === 'draw' && (
                       <div className="space-y-2">
                         <label className="text-xs font-medium text-slate-400">Color</label>
                         <div className="flex items-center gap-2">
@@ -4075,23 +3170,7 @@ export default function App() {
                         Eraser paints with white color to match manga background.
                       </div>
                     )}
-                    {activeTool === 'bg_erase' && (
-                      <div className="p-3 bg-black rounded border border-[#333] text-xs text-slate-400 text-center">
-                        Erase parts of a Text's Background square without affecting the text or background image.
-                      </div>
-                    )}
-                    {activeTool === 'smart_sfx' && (
-                      <div className="p-3 bg-black rounded border border-[#333] text-xs text-slate-400 text-center">
-                        Click on the image. It will automatically pick the background color below the cursor and paint with it! Great for whitening SFX.
-                      </div>
-                    )}
-                    {activeTool === 'gen_erase' && (
-                      <div className="p-3 bg-emerald-950/20 rounded border border-emerald-800/30 text-xs text-emerald-400 text-center">
-                        AI Generative Inpaint: Draw over a region. The AI algorithm will automatically analyze the surrounding background and cleanly remove text.
-                      </div>
-                    )}
-
-                    <button 
+                    <button
                       onClick={() => {
                         saveHistory(selectedImage!.id);
                         updateImage(selectedImage!.id, { paintStrokes: [] });
@@ -4116,59 +3195,35 @@ export default function App() {
 
       {/* Dynamic Purple/Black Liquid Glass Bottom Toolbar */}
       {activeChapterId === null && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-6 py-2.5 bg-black/90 backdrop-blur-xl border border-purple-500/25 rounded-full shadow-[0_12px_45px_-8px_rgba(147,51,234,0.45)] flex items-center justify-between gap-10 z-50 transition-all hover:border-purple-500/40">
-
-          {/* Central Standalone Black Circular Plus Button */}
-          <div className="relative -mt-6">
-            <button 
-              type="button"
-              onClick={() => {
-                if (activeMangaId) {
-                  if (activeVolumeId) {
-                    handleAddChapterPrompt();
-                  } else {
-                    handleAddVolumePrompt();
-                  }
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+          <button
+            type="button"
+            onClick={() => {
+              if (activeMangaId) {
+                if (activeVolumeId) {
+                  handleAddChapterPrompt();
                 } else {
-                  setShowCreateSeriesModal(true);
+                  handleAddVolumePrompt();
                 }
-              }}
-              className="w-14 h-14 bg-black border-2 border-purple-500 rounded-full flex items-center justify-center shadow-[0_5px_22px_rgba(168,85,247,0.55)] cursor-pointer text-white hover:scale-110 active:scale-95 transition-all duration-350"
-              title="Create a new project"
-            >
-              <svg className="w-6 h-6 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
-                <line x1={12} y1={5} x2={12} y2={19} />
-                <line x1={5} y1={12} x2={19} y2={12} />
-              </svg>
-            </button>
-          </div>
-
-          {/* Right Side Tab Action (Library) */}
-          <div className="flex items-center gap-6">
-            <button
-              type="button"
-              onClick={() => {}}
-              className={`flex flex-col items-center gap-1 transition-all group ${activeNavigationTab === 'library' ? 'text-purple-400 scale-105 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-            >
-              <div className={`p-1.5 rounded-xl transition-all ${activeNavigationTab === 'library' ? 'bg-purple-950/40 shadow-[0_0_12px_rgba(168,85,247,0.2)]' : 'group-hover:bg-white/5'}`}>
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                  <rect x={3} y={3} width={7} height={7} rx={1} />
-                  <rect x={14} y={3} width={7} height={7} rx={1} />
-                  <rect x={14} y={14} width={7} height={7} rx={1} />
-                  <rect x={3} y={14} width={7} height={7} rx={1} />
-                </svg>
-              </div>
-              <span className="text-[10px] font-medium tracking-wide">My Library</span>
-            </button>
-          </div>
-
+              } else {
+                setShowCreateSeriesModal(true);
+              }
+            }}
+            className="w-14 h-14 bg-black border-2 border-sky-500 rounded-full flex items-center justify-center shadow-[0_5px_22px_rgba(56, 189, 248,0.55)] cursor-pointer text-white hover:scale-110 active:scale-95 transition-all duration-350"
+            title="Create a new project"
+          >
+            <svg className="w-6 h-6 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+              <line x1={12} y1={5} x2={12} y2={19} />
+              <line x1={5} y1={12} x2={19} y2={12} />
+            </svg>
+          </button>
         </div>
       )}
 
       {/* Stunning Create Project Modular popup */}
       {showCreateProjectModal && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/85 backdrop-blur-md animate-fade-in">
-          <div className="liquid-glass p-8 rounded-3xl max-w-xl w-full mx-4 shadow-[0_20px_50px_rgba(168,85,247,0.3)] border border-purple-500/25 relative text-slate-105 flex flex-col gap-6">
+          <div className="liquid-glass p-8 rounded-3xl max-w-xl w-full mx-4 shadow-[0_20px_50px_rgba(56, 189, 248,0.3)] border border-sky-500/25 relative text-slate-105 flex flex-col gap-6">
             <button 
               onClick={() => setShowCreateProjectModal(false)}
               className="absolute top-4 right-4 text-slate-400 hover:text-white p-2 rounded-full hover:bg-white/5 transition-all text-sm font-bold"
@@ -4177,7 +3232,7 @@ export default function App() {
             </button>
             <div className="flex flex-col gap-1.5 text-left">
               <h2 className="text-2xl font-display font-bold text-white flex items-center gap-2">
-                <span className="text-purple-400">✧</span> Create Translation Project
+                <span className="text-sky-400">✧</span> Create Translation Project
               </h2>
               <p className="text-xs text-slate-400 leading-normal">
                 Kickstart a new translation stream from local folders, archived chapters, or restore previous sessions.
@@ -4190,15 +3245,15 @@ export default function App() {
                   setShowCreateProjectModal(false);
                   fileInputRef.current?.click();
                 }}
-                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-purple-950/20 border border-purple-500/15 hover:border-purple-500/45 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
+                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-blue-950/20 border border-sky-500/15 hover:border-sky-500/45 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
               >
-                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center border border-purple-500/20 text-purple-400">
+                <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center border border-sky-500/20 text-sky-400">
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
                   </svg>
                 </div>
                 <div>
-                  <h4 className="text-sm font-semibold text-white group-hover:text-purple-300">Upload ZIP Chapter</h4>
+                  <h4 className="text-sm font-semibold text-white group-hover:text-sky-300">Upload ZIP Chapter</h4>
                   <p className="text-[11px] text-slate-400 mt-1">Accepts raw comic image files inside any ZIP.</p>
                 </div>
               </button>
@@ -4208,15 +3263,15 @@ export default function App() {
                   setShowCreateProjectModal(false);
                   cleanZipInputRef.current?.click();
                 }}
-                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-purple-950/20 border border-purple-500/15 hover:border-purple-500/40 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
+                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-blue-950/20 border border-sky-500/15 hover:border-sky-500/40 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
               >
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 text-indigo-400">
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20 text-sky-400">
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                   </svg>
                 </div>
                 <div>
-                  <h4 className="text-sm font-semibold text-white group-hover:text-indigo-300">Cleaned Plates ZIP</h4>
+                  <h4 className="text-sm font-semibold text-white group-hover:text-sky-300">Cleaned Plates ZIP</h4>
                   <p className="text-[11px] text-slate-400 mt-1">Superimpose text directly on white-cleaned pages.</p>
                 </div>
               </button>
@@ -4226,9 +3281,9 @@ export default function App() {
                   setShowCreateProjectModal(false);
                   appendImagesInputRef.current?.click();
                 }}
-                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-purple-950/20 border border-purple-500/15 hover:border-purple-500/40 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
+                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-blue-950/20 border border-sky-500/15 hover:border-sky-500/40 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
               >
-                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center border border-purple-500/20 text-purple-400">
+                <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center border border-sky-500/20 text-sky-400">
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                     <rect x={3} y={3} width={18} height={18} rx={2} ry={2} />
                     <circle cx={8.5} cy={8.5} r={1.5} />
@@ -4236,31 +3291,11 @@ export default function App() {
                   </svg>
                 </div>
                 <div>
-                  <h4 className="text-sm font-semibold text-white group-hover:text-purple-300">Add Raw Pages</h4>
+                  <h4 className="text-sm font-semibold text-white group-hover:text-sky-300">Add Raw Pages</h4>
                   <p className="text-[11px] text-slate-400 mt-1">Select and append raw comic files individually.</p>
                 </div>
               </button>
 
-              <button 
-                onClick={() => {
-                  setShowCreateProjectModal(false);
-                  projectInputRef.current?.click();
-                }}
-                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-purple-950/20 border border-purple-500/15 hover:border-purple-500/45 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
-              >
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 text-indigo-400">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                    <line x1={16} y1={13} x2={8} y2={13} />
-                    <line x1={16} y1={17} x2={8} y2={17} />
-                  </svg>
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-white group-hover:text-indigo-300">Restore Session State</h4>
-                  <p className="text-[11px] text-slate-400 mt-1">Re-import previous workspace state (.json).</p>
-                </div>
-              </button>
             </div>
           </div>
         </div>
@@ -4269,7 +3304,7 @@ export default function App() {
       {/* Stunning Create Series Modal */}
       {showCreateSeriesModal && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/90 backdrop-blur-md animate-fade-in text-left" dir="ltr">
-          <div className="liquid-glass p-8 rounded-3xl max-w-lg w-full mx-4 shadow-[0_20px_50px_rgba(168,85,247,0.3)] border border-purple-500/25 relative text-slate-200 flex flex-col gap-5">
+          <div className="liquid-glass p-8 rounded-3xl max-w-lg w-full mx-4 shadow-[0_20px_50px_rgba(56, 189, 248,0.3)] border border-sky-500/25 relative text-slate-200 flex flex-col gap-5">
             <button 
               onClick={() => setShowCreateSeriesModal(false)}
               className="absolute top-4 left-4 text-slate-400 hover:text-white p-2 rounded-full hover:bg-white/5 transition-all text-sm font-bold"
@@ -4277,9 +3312,9 @@ export default function App() {
               ✕
             </button>
             
-            <div className="flex flex-col gap-1.5 text-left border-b border-purple-500/10 pb-4">
+            <div className="flex flex-col gap-1.5 text-left border-b border-sky-500/10 pb-4">
               <h2 className="text-2xl font-display font-bold text-white flex items-center gap-2 justify-start">
-                <span className="text-purple-400">✧</span> Add a New Series to Your Library
+                <span className="text-sky-400">✧</span> Add a New Series to Your Library
               </h2>
               <p className="text-xs text-slate-400">
                 Create a new manga/manhwa work or series to organize and track its volumes and translation chapters.
@@ -4289,13 +3324,13 @@ export default function App() {
             <div className="space-y-4 text-left">
               {/* Cover Upload / URL Preview inline */}
               <div className="space-y-1.5 text-start">
-                <label className="text-xs font-semibold text-purple-300 block text-left">Series Cover Image (PNG or JPG):</label>
+                <label className="text-xs font-semibold text-sky-300 block text-left">Series Cover Image (PNG or JPG):</label>
                 <div className="flex items-center gap-4 flex-row-reverse">
-                  <div className="w-20 h-24 rounded-lg border border-purple-500/10 bg-[#0c061c] overflow-hidden flex items-center justify-center shrink-0">
+                  <div className="w-20 h-24 rounded-lg border border-sky-500/10 bg-[#0c061c] overflow-hidden flex items-center justify-center shrink-0">
                     {newSeriesCoverUrl ? (
                       <img src={newSeriesCoverUrl} alt="Cover Preview" className="w-full h-full object-cover" />
                     ) : (
-                      <ImageIcon size={20} className="text-purple-500/40" />
+                      <ImageIcon size={20} className="text-sky-500/40" />
                     )}
                   </div>
                   <div className="flex flex-col gap-2 w-full text-left">
@@ -4308,7 +3343,7 @@ export default function App() {
                     />
                     <label 
                       htmlFor="series-cover-file"
-                      className="cursor-pointer bg-purple-950/40 hover:bg-purple-900 border border-purple-500/30 text-purple-300 px-4 py-2 rounded-xl text-xs font-bold text-center transition-all block"
+                      className="cursor-pointer bg-blue-950/40 hover:bg-blue-900 border border-sky-500/30 text-sky-300 px-4 py-2 rounded-xl text-xs font-bold text-center transition-all block"
                     >
                       Choose an image from your device
                     </label>
@@ -4319,29 +3354,29 @@ export default function App() {
 
               {/* Series Title */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-purple-300 block text-left">Series Title:</label>
+                <label className="text-xs font-semibold text-sky-300 block text-left">Series Title:</label>
                 <input 
                   type="text"
                   placeholder="e.g.: My Manga Series..."
                   value={newSeriesTitle}
                   onChange={(e) => setNewSeriesTitle(e.target.value)}
-                  className="w-full bg-black/60 border border-purple-500/20 hover:border-purple-500/40 focus:border-purple-400 rounded-xl p-3 text-sm text-white outline-none font-sans text-left"
+                  className="w-full bg-black/60 border border-sky-500/20 hover:border-sky-500/40 focus:border-sky-400 rounded-xl p-3 text-sm text-white outline-none font-sans text-left"
                 />
               </div>
 
               {/* Series Type */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-purple-300 block text-left">Type (Classification):</label>
+                <label className="text-xs font-semibold text-sky-300 block text-left">Type (Classification):</label>
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     onClick={() => setNewSeriesType('manga')}
-                    className={`p-3 rounded-xl border text-xs font-bold transition-all text-center ${newSeriesType === 'manga' ? 'bg-amber-600/35 border-amber-500 text-amber-200' : 'bg-[#080512]/60 border-purple-500/10 text-slate-404'}`}
+                    className={`p-3 rounded-xl border text-xs font-bold transition-all text-center ${newSeriesType === 'manga' ? 'bg-amber-600/35 border-amber-500 text-amber-200' : 'bg-[#080512]/60 border-sky-500/10 text-slate-404'}`}
                   >
                     Manga (black &amp; white)
                   </button>
                   <button
                     onClick={() => setNewSeriesType('manhwa')}
-                    className={`p-3 rounded-xl border text-xs font-bold transition-all text-center ${newSeriesType === 'manhwa' ? 'bg-indigo-600/35 border-indigo-500 text-blue-200' : 'bg-[#080512]/60 border-[#555]/10 text-slate-405'}`}
+                    className={`p-3 rounded-xl border text-xs font-bold transition-all text-center ${newSeriesType === 'manhwa' ? 'bg-blue-600/35 border-blue-500 text-blue-200' : 'bg-[#080512]/60 border-[#555]/10 text-slate-405'}`}
                   >
                     Manhwa (colored)
                   </button>
@@ -4350,27 +3385,27 @@ export default function App() {
 
               {/* Series Description */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-purple-300 block text-left">Brief Description or Summary:</label>
+                <label className="text-xs font-semibold text-sky-300 block text-left">Brief Description or Summary:</label>
                 <textarea 
                   rows={3}
                   placeholder="Write a brief description of the manga's story or translator details..."
                   value={newSeriesDesc}
                   onChange={(e) => setNewSeriesDesc(e.target.value)}
-                  className="w-full bg-black/60 border border-purple-500/20 hover:border-purple-500/40 focus:border-purple-400 rounded-xl p-3 text-sm text-white outline-none resize-none font-sans text-left"
+                  className="w-full bg-black/60 border border-sky-500/20 hover:border-sky-500/40 focus:border-sky-400 rounded-xl p-3 text-sm text-white outline-none resize-none font-sans text-left"
                 />
               </div>
             </div>
 
-            <div className="border-t border-purple-500/10 pt-4 flex justify-end gap-3 mt-2">
+            <div className="border-t border-sky-500/10 pt-4 flex justify-end gap-3 mt-2">
               <button
                 onClick={() => setShowCreateSeriesModal(false)}
-                className="bg-black/60 hover:bg-black border border-purple-500/15 hover:border-purple-500/30 text-slate-350 font-bold py-2.5 px-6 rounded-xl text-xs transition-all cursor-pointer"
+                className="bg-black/60 hover:bg-black border border-sky-500/15 hover:border-sky-500/30 text-slate-350 font-bold py-2.5 px-6 rounded-xl text-xs transition-all cursor-pointer"
               >
                 Cancel (Cancel)
               </button>
               <button
                 onClick={handleCreateSeries}
-                className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-2.5 px-7 rounded-xl text-xs transition-all shadow-lg shadow-purple-950/45 cursor-pointer"
+                className="bg-gradient-to-r from-blue-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold py-2.5 px-7 rounded-xl text-xs transition-all shadow-lg shadow-blue-950/45 cursor-pointer"
               >
                 ✓ Create and Add Series
               </button>
@@ -4382,7 +3417,7 @@ export default function App() {
       {/* Stunning External AI Prompt & Paste Modal */}
       {showExternalAIModal && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in text-left" dir="ltr">
-          <div className="liquid-glass p-8 rounded-3xl max-w-2xl w-full mx-4 shadow-[0_20px_50px_rgba(168,85,247,0.35)] border border-purple-500/25 relative text-slate-200 flex flex-col gap-6 max-h-[90vh] overflow-y-auto">
+          <div className="liquid-glass p-8 rounded-3xl max-w-2xl w-full mx-4 shadow-[0_20px_50px_rgba(56, 189, 248,0.35)] border border-sky-500/25 relative text-slate-200 flex flex-col gap-6 max-h-[90vh] overflow-y-auto">
             <button 
               onClick={() => setShowExternalAIModal(false)}
               className="absolute top-4 left-4 text-slate-400 hover:text-white p-2 rounded-full hover:bg-white/5 transition-all text-sm font-bold"
@@ -4390,9 +3425,9 @@ export default function App() {
               ✕
             </button>
             
-            <div className="flex flex-col gap-1.5 text-left border-b border-purple-500/10 pb-4">
+            <div className="flex flex-col gap-1.5 text-left border-b border-sky-500/10 pb-4">
               <h2 className="text-2xl font-display font-bold text-white flex items-center gap-2 justify-start">
-                <span className="text-purple-400">✧</span> Translation Wizard via External AI Assistant
+                <span className="text-sky-400">✧</span> Translation Wizard via External AI Assistant
               </h2>
               <p className="text-xs text-slate-400">
                 If you don't have your own API keys inside the app, you can provide any external AI model (such as Claude 3.5 Sonnet or Gemini 1.5 Pro) with the page image and the detailed prompt below, so it can return the translation file for you to apply instantly!
@@ -4401,9 +3436,9 @@ export default function App() {
 
             <div className="space-y-4">
               {/* Step 1 */}
-              <div className="space-y-2 border border-purple-500/10 p-4 rounded-2xl bg-purple-950/5">
+              <div className="space-y-2 border border-sky-500/10 p-4 rounded-2xl bg-blue-950/5">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center">1</span>
+                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center">1</span>
                   Step One: Copy the Request Bundle (AI Request Cocktail)
                 </h3>
                 <p className="text-xs text-slate-400">
@@ -4453,7 +3488,7 @@ Please locate speech balloons and output exactly in this JSON format ONLY (No ot
                         color: '#ffffff'
                       });
                     }}
-                    className="absolute bottom-3 left-3 bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg transition-all"
+                    className="absolute bottom-3 left-3 bg-blue-600 hover:bg-sky-500 text-white text-[10px] font-bold py-1.5 px-3 rounded-lg transition-all"
                   >
                     Copy Request (Copy)
                   </button>
@@ -4461,9 +3496,9 @@ Please locate speech balloons and output exactly in this JSON format ONLY (No ot
               </div>
 
               {/* Step 2 */}
-              <div className="space-y-2 border border-purple-500/10 p-4 rounded-2xl bg-purple-950/5">
+              <div className="space-y-2 border border-sky-500/10 p-4 rounded-2xl bg-blue-950/5">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center">2</span>
+                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center">2</span>
                   Step Two: Paste the Retrieved Response (Pasted Response JSON)
                 </h3>
                 <p className="text-xs text-slate-400">
@@ -4473,22 +3508,22 @@ Please locate speech balloons and output exactly in this JSON format ONLY (No ot
                   placeholder="[ ... the retrieved JSON array ... ]"
                   value={externalAIPasteData}
                   onChange={(e) => setExternalAIPasteData(e.target.value)}
-                  className="w-full h-32 bg-black border border-purple-500/20 focus:border-purple-400 rounded-xl p-3 text-xs text-slate-205 outline-none resize-none font-mono text-left"
+                  className="w-full h-32 bg-black border border-sky-500/20 focus:border-sky-400 rounded-xl p-3 text-xs text-slate-205 outline-none resize-none font-mono text-left"
                   dir="ltr"
                 />
               </div>
             </div>
 
-            <div className="border-t border-purple-500/10 pt-4 flex justify-end gap-3 mt-2">
+            <div className="border-t border-sky-500/10 pt-4 flex justify-end gap-3 mt-2">
               <button
                 onClick={() => setShowExternalAIModal(false)}
-                className="bg-black/60 hover:bg-black border border-purple-500/15 hover:border-purple-500/30 text-slate-350 font-bold py-2.5 px-6 rounded-xl text-xs transition-all cursor-pointer"
+                className="bg-black/60 hover:bg-black border border-sky-500/15 hover:border-sky-500/30 text-slate-350 font-bold py-2.5 px-6 rounded-xl text-xs transition-all cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleApplyExternalAICocktail}
-                className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-2.5 px-7 rounded-xl text-xs transition-all shadow-lg shadow-purple-950/45 cursor-pointer"
+                className="bg-gradient-to-r from-blue-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold py-2.5 px-7 rounded-xl text-xs transition-all shadow-lg shadow-blue-950/45 cursor-pointer"
               >
                 ✓ Apply Smart Translation to the Page
               </button>
