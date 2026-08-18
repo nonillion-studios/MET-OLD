@@ -49,6 +49,8 @@ export interface ProcessedImage {
   width: number;
   height: number;
   error?: string;
+  splitGroupId?: string;
+  splitIndex?: number;
 }
 
 export type Tool = 'select' | 'draw' | 'erase';

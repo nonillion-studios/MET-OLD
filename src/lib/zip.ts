@@ -160,23 +160,86 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
   return dataUrl;
 }
 
+// Groups consecutive ProcessedImages that share a splitGroupId into ordered runs.
+// Non-split pages come back as single-element groups so callers can treat all
+// entries uniformly.
+function groupBySplit(processedImages: ProcessedImage[]): ProcessedImage[][] {
+  const groups: ProcessedImage[][] = [];
+  let i = 0;
+  while (i < processedImages.length) {
+    const img = processedImages[i];
+    if (!img.splitGroupId) {
+      groups.push([img]);
+      i++;
+      continue;
+    }
+    const run: ProcessedImage[] = [img];
+    let j = i + 1;
+    while (j < processedImages.length && processedImages[j].splitGroupId === img.splitGroupId) {
+      run.push(processedImages[j]);
+      j++;
+    }
+    run.sort((a, b) => (a.splitIndex ?? 0) - (b.splitIndex ?? 0));
+    groups.push(run);
+    i = j;
+  }
+  return groups;
+}
+
+// Vertically stacks already-rendered piece dataUrls into one composite image.
+async function stackDataUrls(dataUrls: string[], mimeType: string): Promise<string> {
+  const imgs = await Promise.all(dataUrls.map(du => new Promise<HTMLImageElement>((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = reject;
+    im.src = du;
+  })));
+  const width = Math.max(...imgs.map(im => im.width));
+  const totalHeight = imgs.reduce((sum, im) => sum + im.height, 0);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = totalHeight;
+  const ctx = canvas.getContext('2d')!;
+  let y = 0;
+  for (const im of imgs) {
+    ctx.drawImage(im, 0, y);
+    y += im.height;
+  }
+  const mime = mimeType?.includes('jpeg') ? 'image/jpeg' : 'image/png';
+  return canvas.toDataURL(mime);
+}
+
+async function renderGroupToDataUrl(group: ProcessedImage[], format: 'jpeg' | 'png'): Promise<string> {
+  if (group.length === 1) {
+    const img = group[0];
+    if (img.status !== 'done' && (!img.regions || img.regions.length === 0) && (!img.paintStrokes || img.paintStrokes.length === 0)) {
+      return img.dataUrl;
+    }
+    return renderImageToDataUrl(img, format);
+  }
+  const pieceDataUrls = await Promise.all(group.map(img => {
+    if (img.status !== 'done' && (!img.regions || img.regions.length === 0) && (!img.paintStrokes || img.paintStrokes.length === 0)) {
+      return img.dataUrl;
+    }
+    return renderImageToDataUrl(img, format);
+  }));
+  return stackDataUrls(pieceDataUrls, group[0].mimeType);
+}
+
 export async function downloadProcessedZip(processedImages: ProcessedImage[], setProgress?: (msg: string) => void, zipFileName = 'translated_manga.zip') {
   try {
     const zip = new JSZip();
+    const groups = groupBySplit(processedImages);
 
-    for (let idx = 0; idx < processedImages.length; idx++) {
-      const img = processedImages[idx];
-      if (typeof setProgress === 'function') setProgress(`Processing page ${idx + 1} of ${processedImages.length}...`);
-      
-      const ext = img.filename.split('.').pop() || 'png';
+    for (let idx = 0; idx < groups.length; idx++) {
+      const group = groups[idx];
+      if (typeof setProgress === 'function') setProgress(`Processing page ${idx + 1} of ${groups.length}...`);
+
+      const ext = group[0].filename.split('.').pop() || 'png';
       const newFilename = `page-${String(idx + 1).padStart(3, '0')}.${ext}`;
+      const format = group[0].mimeType?.includes('jpeg') ? 'jpeg' : 'png';
 
-      if (img.status !== 'done' && (!img.regions || img.regions.length === 0) && (!img.paintStrokes || img.paintStrokes.length === 0)) {
-        zip.file(newFilename, img.dataUrl.split(',')[1], { base64: true });
-        continue;
-      }
-
-      const dataUrl = await renderImageToDataUrl(img, img.mimeType?.includes('jpeg') ? 'jpeg' : 'png');
+      const dataUrl = await renderGroupToDataUrl(group, format);
       zip.file(newFilename, dataUrl.split(',')[1], { base64: true });
     }
 
@@ -200,15 +263,21 @@ export async function downloadSingleImage(img: ProcessedImage) {
 export async function downloadPdf(processedImages: ProcessedImage[], setProgress?: (p: string) => void) {
   const pdf = new jsPDF();
   let isFirstPage = true;
+  const groups = groupBySplit(processedImages);
 
-  for (let idx = 0; idx < processedImages.length; idx++) {
-    const img = processedImages[idx];
-    if (setProgress) setProgress(`Processing PDF page ${idx + 1} of ${processedImages.length}...`);
+  for (let idx = 0; idx < groups.length; idx++) {
+    const group = groups[idx];
+    if (setProgress) setProgress(`Processing PDF page ${idx + 1} of ${groups.length}...`);
 
-    let finalDataUrl = img.dataUrl;
-
-    if (img.status === 'done' || img.regions.length > 0 || img.paintStrokes.length > 0) {
-      finalDataUrl = await renderImageToDataUrl(img, 'jpeg', 0.9);
+    let finalDataUrl: string;
+    if (group.length === 1) {
+      const img = group[0];
+      finalDataUrl = img.dataUrl;
+      if (img.status === 'done' || img.regions.length > 0 || img.paintStrokes.length > 0) {
+        finalDataUrl = await renderImageToDataUrl(img, 'jpeg', 0.9);
+      }
+    } else {
+      finalDataUrl = await renderGroupToDataUrl(group, 'jpeg');
     }
 
     const imgProps = pdf.getImageProperties(finalDataUrl);

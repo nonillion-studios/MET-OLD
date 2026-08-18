@@ -4,6 +4,8 @@ import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingle
 import { processMangaPages, RawRegion } from './lib/gemini';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool } from './types';
+import { mapRawRegionToPixels } from './utils/textUtils';
+import { UploadReviewModal } from './components/UploadReviewModal';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -98,7 +100,6 @@ export default function App() {
   const [appInitializing, setAppInitializing] = useState(true);
   const [activeNavigationTab] = useState<'library'>('library');
   const [showSettingsPage, setShowSettingsPage] = useState(false);
-  const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
   const [showManagePages, setShowManagePages] = useState(false);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [librarySearchQuery, setLibrarySearchQuery] = useState('');
@@ -322,10 +323,14 @@ export default function App() {
 
       const newRegions: Region[] = parsed.map(raw => {
         const isNormalized = (raw.xmax <= 1000 && raw.ymax <= 1000 && raw.xmax > 1);
-        const x = isNormalized ? ((raw.xmin / 1000) * img.width) : (raw.x ?? raw.xmin ?? 50);
-        const y = isNormalized ? ((raw.ymin / 1000) * img.height) : (raw.y ?? raw.ymin ?? 50);
-        const width = isNormalized ? (((raw.xmax - raw.xmin) / 1000) * img.width) : (raw.w ?? raw.width ?? (raw.xmax - raw.xmin) ?? 150);
-        const height = isNormalized ? (((raw.ymax - raw.ymin) / 1000) * img.height) : (raw.h ?? raw.height ?? (raw.ymax - raw.ymin) ?? 80);
+        const { x, y, width, height } = isNormalized
+          ? mapRawRegionToPixels(raw, img.width, img.height)
+          : {
+              x: raw.x ?? raw.xmin ?? 50,
+              y: raw.y ?? raw.ymin ?? 50,
+              width: raw.w ?? raw.width ?? (raw.xmax - raw.xmin) ?? 150,
+              height: raw.h ?? raw.height ?? (raw.ymax - raw.ymin) ?? 80
+            };
 
         return {
           id: 'region-' + Math.random().toString(36).substr(2, 9),
@@ -1071,11 +1076,8 @@ export default function App() {
             if (!img) return;
             
             const newRegions: Region[] = result.regions.map(raw => {
-              const x = (raw.xmin / 1000) * img.width;
-              const y = (raw.ymin / 1000) * img.height;
-              const width = ((raw.xmax - raw.xmin) / 1000) * img.width;
-              const height = ((raw.ymax - raw.ymin) / 1000) * img.height;
-              
+              const { x, y, width, height } = mapRawRegionToPixels(raw, img.width, img.height);
+
               return {
                 id: Math.random().toString(36).substr(2, 9),
                 type: raw.type,
@@ -1160,10 +1162,7 @@ export default function App() {
       
       const newRegions: Region[] = rawRegions.map(raw => {
         // Map 0-1000 to pixel coordinates
-        const x = (raw.xmin / 1000) * img.width;
-        const y = (raw.ymin / 1000) * img.height;
-        const width = ((raw.xmax - raw.xmin) / 1000) * img.width;
-        const height = ((raw.ymax - raw.ymin) / 1000) * img.height;
+        const { x, y, width, height } = mapRawRegionToPixels(raw, img.width, img.height);
 
         return {
           id: Math.random().toString(36).substr(2, 9),
@@ -1627,34 +1626,12 @@ export default function App() {
               onChange={handleAppendImages}
             />
             <button
-              onClick={() => setShowManagePages(v => !v)}
+              onClick={() => setShowManagePages(true)}
               className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300"
               title="Manage Pages"
             >
               <ImagePlus size={16} /> <span className="hidden sm:inline">Manage Pages</span>
             </button>
-            {showManagePages && (
-              <div className="absolute right-0 top-full mt-2 w-56 liquid-glass rounded-xl border border-sky-500/25 shadow-2xl z-50 flex flex-col p-1.5 gap-0.5">
-                <button
-                  onClick={() => { fileInputRef.current?.click(); setShowManagePages(false); }}
-                  className="flex items-center gap-2 hover:bg-[#222] px-3 py-2 rounded-md text-sm transition-colors text-slate-300 text-left"
-                >
-                  <Upload size={16} /> Import ZIP
-                </button>
-                <button
-                  onClick={() => { cleanZipInputRef.current?.click(); setShowManagePages(false); }}
-                  className="flex items-center gap-2 hover:bg-[#222] px-3 py-2 rounded-md text-sm transition-colors text-slate-300 text-left"
-                >
-                  <Sparkles size={16} /> Cleaned ZIP
-                </button>
-                <button
-                  onClick={() => { appendImagesInputRef.current?.click(); setShowManagePages(false); }}
-                  className="flex items-center gap-2 hover:bg-[#222] px-3 py-2 rounded-md text-sm transition-colors text-slate-300 text-left"
-                >
-                  <ImagePlus size={16} /> Add Images
-                </button>
-              </div>
-            )}
           </div>
 
           <button
@@ -2337,7 +2314,7 @@ export default function App() {
               </div>
               <div className="flex flex-col sm:flex-row items-center gap-3 w-full mt-2">
                 <button
-                  onClick={() => setShowCreateProjectModal(true)}
+                  onClick={() => setShowManagePages(true)}
                   className="w-full sm:w-auto flex-1 bg-gradient-to-r from-blue-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold py-3.5 px-6 rounded-xl shadow-lg shadow-blue-950/30 transition-all active:scale-95 cursor-pointer text-sm"
                 >
                   + Upload Images
@@ -3221,85 +3198,21 @@ export default function App() {
         </div>
       )}
 
-      {/* Stunning Create Project Modular popup */}
-      {showCreateProjectModal && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/85 backdrop-blur-md animate-fade-in">
-          <div className="liquid-glass p-8 rounded-3xl max-w-xl w-full mx-4 shadow-[0_20px_50px_rgba(56, 189, 248,0.3)] border border-sky-500/25 relative text-slate-105 flex flex-col gap-6">
-            <button 
-              onClick={() => setShowCreateProjectModal(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white p-2 rounded-full hover:bg-white/5 transition-all text-sm font-bold"
-            >
-              ✕
-            </button>
-            <div className="flex flex-col gap-1.5 text-left">
-              <h2 className="text-2xl font-display font-bold text-white flex items-center gap-2">
-                <span className="text-sky-400">✧</span> Create Translation Project
-              </h2>
-              <p className="text-xs text-slate-400 leading-normal">
-                Kickstart a new translation stream from local folders, archived chapters, or restore previous sessions.
-              </p>
-            </div>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
-              <button 
-                onClick={() => {
-                  setShowCreateProjectModal(false);
-                  fileInputRef.current?.click();
-                }}
-                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-blue-950/20 border border-sky-500/15 hover:border-sky-500/45 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
-              >
-                <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center border border-sky-500/20 text-sky-400">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
-                  </svg>
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-white group-hover:text-sky-300">Upload ZIP Chapter</h4>
-                  <p className="text-[11px] text-slate-400 mt-1">Accepts raw comic image files inside any ZIP.</p>
-                </div>
-              </button>
-
-              <button 
-                onClick={() => {
-                  setShowCreateProjectModal(false);
-                  cleanZipInputRef.current?.click();
-                }}
-                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-blue-950/20 border border-sky-500/15 hover:border-sky-500/40 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
-              >
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center border border-blue-500/20 text-sky-400">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  </svg>
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-white group-hover:text-sky-300">Cleaned Plates ZIP</h4>
-                  <p className="text-[11px] text-slate-400 mt-1">Superimpose text directly on white-cleaned pages.</p>
-                </div>
-              </button>
-
-              <button 
-                onClick={() => {
-                  setShowCreateProjectModal(false);
-                  appendImagesInputRef.current?.click();
-                }}
-                className="p-5 rounded-2xl bg-[#080512]/60 hover:bg-blue-950/20 border border-sky-500/15 hover:border-sky-500/40 transition-all flex flex-col gap-2.5 text-left group cursor-pointer"
-              >
-                <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center border border-sky-500/20 text-sky-400">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <rect x={3} y={3} width={18} height={18} rx={2} ry={2} />
-                    <circle cx={8.5} cy={8.5} r={1.5} />
-                    <polyline points="21 15 16 10 5 21" />
-                  </svg>
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-white group-hover:text-sky-300">Add Raw Pages</h4>
-                  <p className="text-[11px] text-slate-400 mt-1">Select and append raw comic files individually.</p>
-                </div>
-              </button>
-
-            </div>
-          </div>
-        </div>
+      {/* Unified Upload + Review modal (replaces Create Project modal and Manage Pages dropdown) */}
+      {showManagePages && (
+        <UploadReviewModal
+          images={images}
+          setImages={setImages}
+          fileInputRef={fileInputRef}
+          cleanZipInputRef={cleanZipInputRef}
+          appendImagesInputRef={appendImagesInputRef}
+          zipMatchMode={zipMatchMode}
+          setZipMatchMode={setZipMatchMode}
+          moveImageUp={moveImageUp}
+          moveImageDown={moveImageDown}
+          deleteImage={deleteImage}
+          onClose={() => setShowManagePages(false)}
+        />
       )}
 
       {/* Stunning Create Series Modal */}
