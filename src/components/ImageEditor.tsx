@@ -3,7 +3,7 @@ import Konva from 'konva';
 import { Stage, Layer, Image as KonvaImage, Rect, Text, Group, Transformer, Line } from 'react-konva';
 import useImage from 'use-image';
 import { ProcessedImage, Region, PaintStroke, Tool } from '../types';
-import { calculateAutoFitFontSize } from '../utils/textUtils';
+import { calculateAutoFitFontSize, measureWrappedTextHeight, wrapRtlLines } from '../utils/textUtils';
 
 interface ImageEditorProps {
   image: ProcessedImage;
@@ -19,7 +19,7 @@ interface ImageEditorProps {
   onAddStroke: (stroke: PaintStroke) => void;
 }
 
-const AutoFitText = ({ region }: { region: Region }) => {
+const AutoFitText = ({ region, pageHeight }: { region: Region; pageHeight: number }) => {
   const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
 
   const fontSize = useMemo(() => {
@@ -48,11 +48,50 @@ const AutoFitText = ({ region }: { region: Region }) => {
     region.letterSpacing
   ]);
 
+  // Ensure the box never clips the text: grow the rendered height (centered on the
+  // region's vertical middle, clamped to the page bounds) if the wrapped text at the
+  // effective font size doesn't fit within region.height.
+  const { renderHeight, yOffset } = useMemo(() => {
+    if (!region.translatedText) return { renderHeight: region.height, yOffset: 0 };
+    const requiredHeight = measureWrappedTextHeight(
+      region.translatedText,
+      region.width,
+      region.fontFamily,
+      fontStyleStr,
+      region.lineHeight || 1.2,
+      region.letterSpacing || 0,
+      fontSize
+    );
+    if (requiredHeight <= region.height) return { renderHeight: region.height, yOffset: 0 };
+
+    const extra = requiredHeight - region.height;
+    let offset = -extra / 2;
+    if (region.y + offset < 0) {
+      offset = -region.y;
+    }
+    if (region.y + offset + requiredHeight > pageHeight) {
+      offset = Math.min(offset, pageHeight - requiredHeight - region.y);
+    }
+    return { renderHeight: requiredHeight, yOffset: offset };
+  }, [
+    region.translatedText,
+    region.width,
+    region.height,
+    region.fontFamily,
+    fontStyleStr,
+    region.lineHeight,
+    region.letterSpacing,
+    region.y,
+    fontSize,
+    pageHeight
+  ]);
+
   return (
     <Text
-      text={region.translatedText ? region.translatedText.split('\n').map(line => '‫' + line + '‏').join('\n') : ''}
+      text={region.translatedText ? wrapRtlLines(region.translatedText) : ''}
+      y={yOffset}
       width={region.width}
-      height={region.height}
+      height={renderHeight}
       fill={region.textColor}
       stroke={region.strokeColor !== 'transparent' ? region.strokeColor : undefined}
       strokeWidth={region.strokeColor !== 'transparent' ? region.strokeWidth : 0}
@@ -344,7 +383,7 @@ export function ImageEditor({
                     }}
                   >
                     <Rect width={region.width} height={region.height} fill="transparent" />
-                    <AutoFitText region={region} />
+                    <AutoFitText region={region} pageHeight={image.height} />
                   </Group>
                 ))}
 

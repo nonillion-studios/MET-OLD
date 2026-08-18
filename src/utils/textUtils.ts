@@ -27,6 +27,10 @@ export function mapRawRegionToPixels(
   return clampRegionToImage(x, y, width, height, imgWidth, imgHeight);
 }
 
+export function wrapRtlLines(text: string): string {
+  return text.split('\n').map(line => '⁧' + line + '⁩').join('\n');
+}
+
 export function calculateAutoFitFontSize(
   text: string,
   width: number,
@@ -55,7 +59,7 @@ export function calculateAutoFitFontSize(
   });
 
   const testNode = new Konva.Text({
-    text: text.split('\n').map(line => '\u202B' + line + '\u200F').join('\n'),
+    text: wrapRtlLines(text),
     width: width,
     fontFamily: fontFamily,
     fontStyle: fontStyle,
@@ -89,4 +93,34 @@ export function calculateAutoFitFontSize(
   testNode.destroy();
 
   return Math.max(9, bestFontSize); // Absolute minimum 9px to prevent unreadable microscopic fonts
+}
+
+// Measures the actual wrapped height that `text` requires at `fontSize` within `width`,
+// using the same RTL-wrapped measurement approach as calculateAutoFitFontSize. Callers use
+// this to detect when a text box would clip its content and needs to grow.
+export function measureWrappedTextHeight(
+  text: string,
+  width: number,
+  fontFamily: string,
+  fontStyle: string,
+  lineHeight: number,
+  letterSpacing: number,
+  fontSize: number
+): number {
+  if (!text) return 0;
+
+  const node = new Konva.Text({
+    text: wrapRtlLines(text),
+    width: width,
+    fontFamily: fontFamily,
+    fontStyle: fontStyle,
+    lineHeight: lineHeight,
+    letterSpacing: letterSpacing,
+    fontSize: fontSize,
+    wrap: 'word'
+  });
+
+  const height = node.height();
+  node.destroy();
+  return height;
 }

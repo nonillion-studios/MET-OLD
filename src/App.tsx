@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, Suspense } from 'react';
+import Konva from 'konva';
 import { Upload, Download, Play, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, ZoomIn, ZoomOut, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Sparkles, Undo, Redo, Wand2, Scissors, Settings, Search, X } from 'lucide-react';
 import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingleImage } from './lib/zip';
 import { processMangaPages, RawRegion } from './lib/gemini';
@@ -6,6 +7,7 @@ import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool } from './types';
 import { mapRawRegionToPixels } from './utils/textUtils';
 import { UploadReviewModal } from './components/UploadReviewModal';
+import { PageTextsModal } from './components/PageTextsModal';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -101,6 +103,7 @@ export default function App() {
   const [activeNavigationTab] = useState<'library'>('library');
   const [showSettingsPage, setShowSettingsPage] = useState(false);
   const [showManagePages, setShowManagePages] = useState(false);
+  const [showPageTextsModal, setShowPageTextsModal] = useState(false);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [librarySearchQuery, setLibrarySearchQuery] = useState('');
   const filteredMangas = librarySearchQuery.trim()
@@ -582,32 +585,86 @@ export default function App() {
 
     let formatted = cleanText;
     if (style === 'oval') {
-      const words = cleanText.split(/\s+/);
-      if (words.length > 2) {
-        const middleIndex = Math.floor(words.length / 2);
-        const extendableArabicLetters = /[ابتثجحخدرزسشصضطظعغفقمنهويىئؤأإ]/;
-        
-        const elongatedWords = words.map((word, idx) => {
-          if (idx === middleIndex || (words.length > 4 && Math.abs(idx - middleIndex) <= 1)) {
-            for (let charIdx = 0; charIdx < word.length; charIdx++) {
-              if (extendableArabicLetters.test(word[charIdx]) && charIdx < word.length - 1) {
-                return word.slice(0, charIdx + 1) + 'ـــ' + word.slice(charIdx + 1);
+      const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
+      const extendableArabicLetters = /[ابتثجحخدرزسشصضطظعغفقمنهويىئؤأإ]/;
+
+      // Throwaway single-line measurement node (no width constraint) to greedily pack
+      // words into visual lines the same way calculateAutoFitFontSize measures text.
+      const measureNode = new Konva.Text({
+        fontFamily: region.fontFamily,
+        fontStyle: fontStyleStr,
+        fontSize: region.fontSize,
+        letterSpacing: region.letterSpacing || 0,
+      });
+      const measureWidth = (s: string) => {
+        measureNode.text(s);
+        return measureNode.width();
+      };
+
+      // Greedy word-wrap: pack words per line, breaking when adding the next word
+      // would exceed the region's width.
+      const paragraphs = cleanText.split('\n');
+      const lines: string[] = [];
+      for (const para of paragraphs) {
+        const words = para.split(/\s+/).filter(w => w.length > 0);
+        if (words.length === 0) {
+          lines.push('');
+          continue;
+        }
+        let currentLine = words[0];
+        for (let i = 1; i < words.length; i++) {
+          const candidate = currentLine + ' ' + words[i];
+          if (measureWidth(candidate) > region.width) {
+            lines.push(currentLine);
+            currentLine = words[i];
+          } else {
+            currentLine = candidate;
+          }
+        }
+        lines.push(currentLine);
+      }
+
+      // Find the widest line's width as the justification target.
+      const lineWidths = lines.map(l => measureWidth(l));
+      const targetWidth = Math.max(0, ...lineWidths);
+
+      const justifiedLines = lines.map((line, idx) => {
+        if (!line) return line;
+        let width = lineWidths[idx];
+        // Only stretch lines meaningfully narrower than the target line.
+        if (targetWidth <= 0 || width >= targetWidth * 0.95) return line;
+
+        const words = line.split(' ');
+        const insertCounts = new Array(words.length).fill(0);
+        const MAX_PER_WORD = 2;
+        let safety = 0;
+
+        while (width < targetWidth * 0.95 && safety < 200) {
+          safety++;
+          let insertedThisPass = false;
+
+          for (let w = 0; w < words.length && width < targetWidth * 0.95; w++) {
+            if (insertCounts[w] >= MAX_PER_WORD) continue;
+            const word = words[w];
+            for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
+              if (extendableArabicLetters.test(word[charIdx])) {
+                words[w] = word.slice(0, charIdx + 1) + 'ـــ' + word.slice(charIdx + 1);
+                insertCounts[w]++;
+                insertedThisPass = true;
+                width = measureWidth(words.join(' '));
+                break;
               }
             }
           }
-          return word;
-        });
-        formatted = elongatedWords.join(' ');
-      } else if (words.length > 0) {
-        const extendableArabicLetters = /[ابتثجحخدرزسشصضطظعغفقمنهويىئؤأإ]/;
-        const w = words[0];
-        for (let charIdx = 0; charIdx < w.length; charIdx++) {
-          if (extendableArabicLetters.test(w[charIdx]) && charIdx < w.length - 1) {
-            formatted = w.slice(0, charIdx + 1) + 'ـــ' + w.slice(charIdx + 1);
-            break;
-          }
+
+          if (!insertedThisPass) break; // no more eligible letters anywhere in the line
         }
-      }
+
+        return words.join(' ');
+      });
+
+      measureNode.destroy();
+      formatted = justifiedLines.join('\n');
     }
 
     updateRegion(region.id, { translatedText: formatted });
@@ -1631,6 +1688,13 @@ export default function App() {
               title="Manage Pages"
             >
               <ImagePlus size={16} /> <span className="hidden sm:inline">Manage Pages</span>
+            </button>
+            <button
+              onClick={() => setShowPageTextsModal(true)}
+              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300"
+              title="All Texts in Page"
+            >
+              <TypeIcon size={16} /> <span className="hidden sm:inline">All Texts</span>
             </button>
           </div>
 
@@ -3212,6 +3276,18 @@ export default function App() {
           moveImageDown={moveImageDown}
           deleteImage={deleteImage}
           onClose={() => setShowManagePages(false)}
+        />
+      )}
+
+      {showPageTextsModal && (
+        <PageTextsModal
+          regions={selectedImage?.regions || []}
+          onClose={() => setShowPageTextsModal(false)}
+          onSelectRegion={(id) => {
+            setSelectedRegionId(id);
+            if (activeTool !== 'select') setActiveTool('select');
+            setShowPageTextsModal(false);
+          }}
         />
       )}
 

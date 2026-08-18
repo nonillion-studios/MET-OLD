@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
 import { saveAs } from 'file-saver';
 import { ProcessedImage } from '../types';
-import { calculateAutoFitFontSize } from '../utils/textUtils';
+import { calculateAutoFitFontSize, measureWrappedTextHeight, wrapRtlLines } from '../utils/textUtils';
 
 export async function extractImagesFromZip(file: File): Promise<ProcessedImage[]> {
   const zip = await JSZip.loadAsync(file);
@@ -126,12 +126,38 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
       );
     }
 
-    const group = new Konva.Group({ x: region.x, y: region.y, width: region.width, height: region.height, rotation: region.angle, opacity: region.opacity ?? 1 });
-    group.add(new Konva.Text({ 
-      text: region.translatedText ? region.translatedText.split('\n').map(line => '\u202B' + line + '\u200F').join('\n') : '', 
-      width: region.width, 
-      height: region.height, 
-      fill: region.textColor, 
+    let renderHeight = region.height;
+    let yOffset = 0;
+    if (region.translatedText) {
+      const requiredHeight = measureWrappedTextHeight(
+        region.translatedText,
+        region.width,
+        region.fontFamily,
+        fontStyleStr,
+        region.lineHeight || 1.2,
+        region.letterSpacing || 0,
+        renderFontSize
+      );
+      if (requiredHeight > region.height) {
+        const extra = requiredHeight - region.height;
+        renderHeight = requiredHeight;
+        yOffset = -extra / 2;
+        // Clamp so the expanded box doesn't extend past the page's top/bottom edge
+        if (region.y + yOffset < 0) {
+          yOffset = -region.y;
+        }
+        if (region.y + yOffset + renderHeight > img.height) {
+          yOffset = Math.min(yOffset, img.height - renderHeight - region.y);
+        }
+      }
+    }
+
+    const group = new Konva.Group({ x: region.x, y: region.y + yOffset, width: region.width, height: renderHeight, rotation: region.angle, opacity: region.opacity ?? 1 });
+    group.add(new Konva.Text({
+      text: region.translatedText ? wrapRtlLines(region.translatedText) : '',
+      width: region.width,
+      height: renderHeight,
+      fill: region.textColor,
       stroke: region.strokeColor !== 'transparent' ? region.strokeColor : undefined, 
       strokeWidth: region.strokeColor !== 'transparent' ? region.strokeWidth : 0, 
       fontFamily: region.fontFamily, 
