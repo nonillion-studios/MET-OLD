@@ -1584,7 +1584,7 @@ export default function App() {
       )}
       {/* Topbar */}
       {activeNavigationTab === 'library' && activeChapterId !== null && (
-        <header className="h-16 border-b border-sky-500/10 flex items-center justify-between px-3 sm:px-6 bg-black/40 backdrop-blur-md shrink-0 gap-3 overflow-x-auto">
+        <header className="min-h-16 border-b border-sky-500/10 flex flex-wrap items-center justify-between px-3 sm:px-6 py-2 bg-black/40 backdrop-blur-md shrink-0 gap-3">
           <div className="flex items-center gap-3 sm:gap-6 shrink-0">
             <button
               onClick={() => {
@@ -1602,7 +1602,7 @@ export default function App() {
             </div>
           </div>
 
-        <div className="flex items-center gap-3 z-10 shrink-0">
+        <div className="flex flex-wrap items-center gap-3 z-10">
           <div className="relative">
             <input
               type="file"
@@ -1660,7 +1660,7 @@ export default function App() {
           <button
             onClick={processAllImages}
             disabled={images.length === 0 || isProcessingAll}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-4 py-2 rounded-md font-medium text-sm transition-colors"
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-3 sm:px-4 py-2 rounded-md font-medium text-sm transition-colors"
           >
             {isProcessingAll ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
             <span className="hidden sm:inline">Process All</span>
@@ -1668,32 +1668,33 @@ export default function App() {
 
           <button
             onClick={() => setShowOriginal(!showOriginal)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium text-sm transition-colors border ${showOriginal ? 'bg-amber-600 border-amber-600 text-white' : 'bg-[#111] border-[#444] text-slate-300 hover:bg-[#222]'}`}
+            className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-md font-medium text-sm transition-colors border ${showOriginal ? 'bg-amber-600 border-amber-600 text-white' : 'bg-[#111] border-[#444] text-slate-300 hover:bg-[#222]'}`}
           >
-            {showOriginal ? 'Showing Original' : 'View Original'}
+            <span className="sm:hidden">{showOriginal ? 'Original' : 'View'}</span>
+            <span className="hidden sm:inline">{showOriginal ? 'Showing Original' : 'View Original'}</span>
           </button>
 
           <div className="flex bg-emerald-700/50 rounded-md overflow-hidden border border-emerald-600/30">
             <button
               onClick={handleExportZip}
               disabled={images.length === 0}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors border-r border-emerald-500/20"
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed px-3 sm:px-4 py-2 font-medium text-sm text-white transition-colors border-r border-emerald-500/20"
               title="Export as ZIP archive"
             >
-              <Download size={16} /> ZIP
+              <Download size={16} /> <span className="hidden sm:inline">ZIP</span>
             </button>
             <button
               onClick={handleExportPsd}
               disabled={images.length === 0}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-sky-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors border-r border-sky-500/20"
+              className="flex items-center gap-2 bg-blue-600 hover:bg-sky-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-3 sm:px-4 py-2 font-medium text-sm text-white transition-colors border-r border-sky-500/20"
               title="Export PSD package for Photoshop (Photoshop Layout Layers Archive)"
             >
-              <Download size={16} className="text-sky-200" /> New PSD
+              <Download size={16} className="text-sky-200" /> <span className="hidden sm:inline">New PSD</span>
             </button>
             <button
               onClick={handleExportPdf}
               disabled={images.length === 0}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed px-4 py-2 font-medium text-sm text-white transition-colors"
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/50 disabled:cursor-not-allowed px-3 sm:px-4 py-2 font-medium text-sm text-white transition-colors"
               title="Export as paginated PDF"
             >
               PDF
@@ -1723,9 +1724,9 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                {/* Left Config Panel */}
-                <div className="md:col-span-2 space-y-6">
+              <div className="flex flex-col gap-6">
+                {/* Config Panel */}
+                <div className="space-y-6">
                   {/* API Key Box */}
                   <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
                     <div className="flex justify-between items-center">
@@ -1763,7 +1764,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Right Toggle Rules */}
+                {/* Toggle Rules */}
                 <div className="space-y-6">
                   <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-5">
                     <h3 className="text-base font-semibold text-white font-display">Optimization Rules</h3>

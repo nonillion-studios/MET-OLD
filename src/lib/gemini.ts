@@ -23,7 +23,7 @@ export interface RawRegion {
 }
 
 export async function generateInpaint(base64Image: string, mimeType: string, customApiKey?: string): Promise<string> {
-  const key = customApiKey || process.env.GEMINI_API_KEY;
+  const key = customApiKey;
   if (!key) {
     throw new Error("API Key is required");
   }
@@ -61,7 +61,7 @@ export async function generateInpaint(base64Image: string, mimeType: string, cus
 }
 
 export async function processMangaPages(pages: { id: string, base64Image: string, mimeType: string }[], customApiKey?: string, customInstructions?: string, translateJapanese?: boolean, translateSfx?: boolean): Promise<{ id: string, regions: RawRegion[] }[]> {
-  const key = customApiKey || process.env.GEMINI_API_KEY;
+  const key = customApiKey;
   if (!key) {
     throw new Error("API Key is required");
   }
