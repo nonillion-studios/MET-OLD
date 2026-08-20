@@ -43,6 +43,17 @@ Launches a Gradio `Interface` (image in → annotated image + JSON detections
 out) with `share=True`, so it also prints a temporary public URL — handy for
 quickly trying the model without writing any client code.
 
+**Deploying to a Hugging Face ZeroGPU Space**: ZeroGPU Spaces require at least
+one GPU-touching function to be decorated with `@spaces.GPU` (from the `spaces`
+package), imported *before* torch/CUDA initializes — otherwise the Space fails
+to start with `No @spaces.GPU function detected during startup`. `gradio_app.py`
+already handles this: it imports `spaces` and wraps `detect()` in `@spaces.GPU`
+when the package is available, and falls back to a no-op decorator everywhere
+else (local runs, Docker, plain Colab) so the same file works in both contexts.
+Add `spaces` to your Space's `requirements.txt` (it's preinstalled on HF Spaces
+runtime and doesn't need to be pinned) - it isn't in this folder's
+`requirements.txt` since it's only meaningful on Hugging Face's own infrastructure.
+
 ### 4. Free cloud (Google Colab)
 
 Run in a Colab notebook with a free GPU:

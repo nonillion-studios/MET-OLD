@@ -4,16 +4,32 @@ of the raw Flask API. Useful for quickly trying the model or sharing a public de
 link (e.g. from Google Colab) without writing any client code.
 
 Requires `best.pt` to be present in this folder (see README.md).
+
+Hugging Face ZeroGPU Spaces note: a ZeroGPU Space requires at least one function
+that actually touches the GPU to be wrapped in `@spaces.GPU` (from the `spaces`
+package), and `import spaces` must happen before any CUDA/torch initialization -
+otherwise the Space fails to start with "No @spaces.GPU function detected during
+startup". This only applies when running on an actual ZeroGPU Space; the try/except
+below makes the decorator a no-op everywhere else (local runs, Docker, plain Colab).
 """
 import cv2
 import gradio as gr
 import numpy as np
+
+try:
+    import spaces
+    gpu_decorator = spaces.GPU
+except ImportError:
+    def gpu_decorator(fn=None, **kwargs):
+        return fn if fn is not None else (lambda f: f)
+
 from ultralytics import YOLO
 
 MODEL_PATH = "best.pt"
 model = YOLO(MODEL_PATH)
 
 
+@gpu_decorator
 def detect(image: np.ndarray, confidence: float):
     if image is None:
         return None, {}
