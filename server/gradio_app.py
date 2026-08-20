@@ -93,6 +93,9 @@ demo = gr.Interface(
     title="Manga-AI-detector",
     description="YOLOv11 detector for panel / bubble / text / sfx regions in manga pages.",
 )
+# Gradio names the callable API endpoint after the wrapped function (i.e. "/detect",
+# since fn=detect above) - src/lib/detector.ts's detectPageViaGradio() calls it by
+# that name. If you rename detect() to something else, update detector.ts to match.
 
 if __name__ == "__main__":
     demo.launch(share=True)

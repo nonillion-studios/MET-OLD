@@ -118,7 +118,7 @@ export async function detectPageViaGradio(
 
   let result;
   try {
-    result = await client.predict('/predict', { image: blob, confidence });
+    result = await client.predict('/detect', { image: blob, confidence });
   } catch (e: any) {
     throw new Error(`Ultra Mode: Gradio Space call failed (${e?.message || e})`);
   }
