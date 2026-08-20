@@ -33,9 +33,9 @@ For each page, detect all speech bubbles, narrative text, and sound effects (SFX
     - textColor: hex color code.
     - strokeColor: hex color code for the text outline (critical for SFX or hiding original text).
     - strokeWidth: outline thickness (e.g. 0 to 10).
-    - fontFamily: choose exactly from: "Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas", "Almarai". (e.g. Marhey/Katibeh/Changa/Lemonada for informal conversation bubbles, Aref Ruqaa/Lalezar/Rakkas for SFX or angry shouts, Cairo/Almarai/Tajawal for formal narration or thoughts). VARY THE FONTS ACROSS DIFFERENT BUBBLES DEPENDING ON THE TONE AND CONTEXT.
+    - fontFamily: choose exactly from: "Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas", "Almarai". (e.g. Marhey/Katibeh/Changa/Lemonada for informal conversation bubbles, Aref Ruqaa/Lalezar/Rakkas for SFX or angry shouts, Cairo/Almarai/Tajawal for formal narration or thoughts). VARY THE FONTS ACROSS DIFFERENT BUBBLES DEPENDING ON THE TONE AND CONTEXT.(marahy by def for bubbles only (try to make fonts units))
     - fontSize: suggest a base size (e.g. 24-72).
-    - fontWeight: 'normal', 'bold', '800', etc.
+    - fontWeight: 'normal', 'bold', '800', etc (bold by def).
     - fontStyle: 'normal' or 'italic'.
     - textAlign: 'center', 'right', 'left' (mostly center for bubbles).
     - lineHeight: usually 1.2 to 1.5.

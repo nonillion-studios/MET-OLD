@@ -103,6 +103,9 @@ export default function App() {
   const [compressBeforeProcessing, setCompressBeforeProcessing] = useState<boolean>(() => {
     return localStorage.getItem('manga_compress_before_processing') !== 'false';
   });
+  const [autoEnhanceAfterProcess, setAutoEnhanceAfterProcess] = useState<boolean>(() => {
+    return localStorage.getItem('manga_auto_enhance_after_process') !== 'false';
+  });
   
   const [customFonts, setCustomFonts] = useState<string[]>([]);
   const [showExternalAIModal, setShowExternalAIModal] = useState(false);
@@ -156,6 +159,8 @@ export default function App() {
     if (savedAutoFit !== null) setAutoFitAndCenter(savedAutoFit === 'true');
     const savedCompress = localStorage.getItem('manga_compress_before_processing');
     if (savedCompress !== null) setCompressBeforeProcessing(savedCompress === 'true');
+    const savedAutoEnhance = localStorage.getItem('manga_auto_enhance_after_process');
+    if (savedAutoEnhance !== null) setAutoEnhanceAfterProcess(savedAutoEnhance === 'true');
     
     // Preload Arabic fonts
     const fontsToLoad = [
@@ -261,6 +266,11 @@ export default function App() {
   const handleSetCompressBeforeProcessing = (val: boolean) => {
     setCompressBeforeProcessing(val);
     localStorage.setItem('manga_compress_before_processing', String(val));
+  };
+
+  const handleSetAutoEnhanceAfterProcess = (val: boolean) => {
+    setAutoEnhanceAfterProcess(val);
+    localStorage.setItem('manga_auto_enhance_after_process', String(val));
   };
 
   const compressImageBase64 = async (base64: string, maxDim: number = 1600, quality: number = 0.85): Promise<string> => {
@@ -650,6 +660,160 @@ export default function App() {
     });
   };
 
+  // Pure computation: given a region, returns oval-justified kashida text (or null if
+  // the region has no meaningful multi-line content to justify). Extracted from
+  // applyKashidaHarmony so it can also be invoked automatically after AI processing
+  // without depending on selectedImageId/selectedRegionId.
+  const computeOvalKashidaText = (region: Region): string | null => {
+    const originalText = region.translatedText || '';
+    const cleanText = originalText.replace(/ـ+/g, '');
+    if (!cleanText.trim()) return null;
+
+    const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
+    const extendableArabicLetters = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
+
+    const measureNode = new Konva.Text({
+      fontFamily: region.fontFamily,
+      fontStyle: fontStyleStr,
+      fontSize: region.fontSize,
+      letterSpacing: region.letterSpacing || 0,
+    });
+    const measureWidth = (s: string) => {
+      measureNode.text(s);
+      return measureNode.width();
+    };
+
+    const paragraphs = cleanText.split('\n');
+    const lines: string[] = [];
+    for (const para of paragraphs) {
+      const words = para.split(/\s+/).filter(w => w.length > 0);
+      if (words.length === 0) {
+        lines.push('');
+        continue;
+      }
+      let currentLine = words[0];
+      for (let i = 1; i < words.length; i++) {
+        const candidate = currentLine + ' ' + words[i];
+        if (measureWidth(candidate) > region.width) {
+          lines.push(currentLine);
+          currentLine = words[i];
+        } else {
+          currentLine = candidate;
+        }
+      }
+      lines.push(currentLine);
+    }
+
+    // Only meaningful for multi-line wrapped text — skip empty/short single-word regions.
+    if (lines.length <= 1) {
+      measureNode.destroy();
+      return null;
+    }
+
+    const lineWidths = lines.map(l => measureWidth(l));
+    const maxLineWidth = Math.max(0, ...lineWidths);
+    const n = lines.length;
+    const lineTargets = n > 1
+      ? lines.map((_, i) => maxLineWidth * (0.65 + 0.35 * Math.sin(Math.PI * (i + 0.5) / n)))
+      : lineWidths.slice();
+
+    const justifiedLines = lines.map((line, idx) => {
+      if (!line) return line;
+      if (n <= 1) return line;
+      let width = lineWidths[idx];
+      const targetWidth = lineTargets[idx];
+      if (targetWidth <= 0 || width >= targetWidth * 0.95) return line;
+
+      const words = line.split(' ');
+      const insertCounts = new Array(words.length).fill(0);
+      const MAX_PER_WORD = 2;
+      let safety = 0;
+
+      while (width < targetWidth * 0.95 && safety < 200) {
+        safety++;
+        let insertedThisPass = false;
+
+        for (let w = 0; w < words.length && width < targetWidth * 0.95; w++) {
+          if (insertCounts[w] >= MAX_PER_WORD) continue;
+          const word = words[w];
+          for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
+            if (extendableArabicLetters.test(word[charIdx])) {
+              words[w] = word.slice(0, charIdx + 1) + 'ـــ' + word.slice(charIdx + 1);
+              insertCounts[w]++;
+              insertedThisPass = true;
+              width = measureWidth(words.join(' '));
+              break;
+            }
+          }
+        }
+
+        if (!insertedThisPass) break;
+      }
+
+      return words.join(' ');
+    });
+
+    measureNode.destroy();
+    return justifiedLines.join('\n');
+  };
+
+  // Pure computation: given an image's data URL and a set of regions (not necessarily
+  // the ones currently in state), returns the regions with bubble bounds/contours
+  // recentered via flood fill. Mirrors computeBubbleFillPreview but takes its inputs
+  // explicitly so it can run on regions that haven't been committed to state yet
+  // (e.g. right after AI processing completes).
+  const computeBubbleFillForRegions = async (imgDataUrl: string, regions: Region[]): Promise<{ newRegions: Region[], changed: boolean }> => {
+    const imageObj = new Image();
+    imageObj.src = imgDataUrl;
+    await new Promise((resolve) => {
+      imageObj.onload = resolve;
+      imageObj.onerror = resolve;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = imageObj.width;
+    canvas.height = imageObj.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return { newRegions: regions, changed: false };
+
+    ctx.drawImage(imageObj, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    const newRegions = [...regions];
+    let changed = false;
+    for (let i = 0; i < newRegions.length; i++) {
+      const region = newRegions[i];
+      if (region.type === 'bubble') {
+        const startX = Math.floor(region.x + region.width / 2);
+        const startY = Math.floor(region.y + region.height / 2);
+        const result = floodFillBubbleDetailed(imageData, startX, startY, region.width, region.height);
+        if (result) {
+          newRegions[i] = {
+            ...region,
+            ...result.safeTextBounds,
+            bubbleContour: result.contour,
+            textAlign: 'center'
+          };
+          changed = true;
+        }
+      }
+    }
+    return { newRegions, changed };
+  };
+
+  // Runs bubble-centering + oval kashida justification on a freshly-processed image's
+  // regions, without depending on selection or state (regions may not be committed yet).
+  // Used by the auto-enhance-after-processing pipeline (autoEnhanceAfterProcess setting).
+  const autoEnhanceRegionsForImage = async (imgDataUrl: string, regions: Region[]): Promise<Region[]> => {
+    const { newRegions } = await computeBubbleFillForRegions(imgDataUrl, regions);
+    return newRegions.map(region => {
+      if (region.type !== 'bubble') return region;
+      const kashidaText = computeOvalKashidaText(region);
+      if (kashidaText === null) return region;
+      return { ...region, translatedText: kashidaText, textAlign: 'center' as const };
+    });
+  };
+
   const applyKashidaHarmony = (style: 'oval' | 'rectangular') => {
     if (!selectedImageId || !selectedRegionId) return;
     const img = images.find(i => i.id === selectedImageId);
@@ -659,7 +823,7 @@ export default function App() {
 
     saveHistory(img.id);
     let originalText = region.translatedText || '';
-    
+
     // Remove any existing kashidas to format cleanly
     let cleanText = originalText.replace(/ـ+/g, '');
 
@@ -1324,7 +1488,10 @@ export default function App() {
             if (autoFitAndCenter) {
               finalRegions = await traceRegionsWithBubbleDetection(img.originalDataUrl || img.dataUrl, newRegions);
             }
-            
+            if (autoEnhanceAfterProcess) {
+              finalRegions = await autoEnhanceRegionsForImage(img.originalDataUrl || img.dataUrl, finalRegions);
+            }
+
             updateImage(img.id, { status: 'done', regions: finalRegions });
           }));
         } catch (err: any) {
@@ -1415,6 +1582,9 @@ export default function App() {
       let finalRegions = newRegions;
       if (autoFitAndCenter) {
         finalRegions = await traceRegionsWithBubbleDetection(srcBase64, newRegions);
+      }
+      if (autoEnhanceAfterProcess) {
+        finalRegions = await autoEnhanceRegionsForImage(srcBase64, finalRegions);
       }
 
       updateImage(img.id, { status: 'done', regions: finalRegions });
@@ -2681,18 +2851,20 @@ export default function App() {
                           <Wand2 size={14} /> Center All Bubbles
                         </button>
                       )}
-                      <button 
-                        onClick={() => {
-                          if (selectedForProcess.size > 0) {
-                            processSelectedImages();
-                          } else {
-                            processImage(selectedImage);
-                          }
-                        }}
-                        className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded text-xs font-medium transition-colors"
-                      >
-                        <Play size={14} /> {selectedForProcess.size > 0 ? `Process Selected (${selectedForProcess.size})` : 'Process Image'}
-                      </button>
+                      {(selectedForProcess.size > 0 || selectedImage.status !== 'done') && (
+                        <button
+                          onClick={() => {
+                            if (selectedForProcess.size > 0) {
+                              processSelectedImages();
+                            } else {
+                              processImage(selectedImage);
+                            }
+                          }}
+                          className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded text-xs font-medium transition-colors"
+                        >
+                          <Play size={14} /> {selectedForProcess.size > 0 ? `Process Selected (${selectedForProcess.size})` : 'Process Image'}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -3524,6 +3696,19 @@ export default function App() {
                         <span className="flex flex-col">
                           <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Pre-Compress Plate Images</span>
                           <span className="text-[10px] text-slate-500 mt-0.5">Reduces page sizes to achieve 3.5x faster analytical cycle times.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={autoEnhanceAfterProcess}
+                          onChange={(e) => handleSetAutoEnhanceAfterProcess(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Auto Center Bubbles + Kashida After Processing</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Automatically runs bubble-centering and Arabic kashida justification once the AI finishes a page.</span>
                         </span>
                       </label>
                     </div>

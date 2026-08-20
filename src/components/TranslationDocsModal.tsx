@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronUp, ChevronDown, X, FileText, Upload } from 'lucide-react';
+import mammoth from 'mammoth';
 import { ProcessedImage } from '../types';
 import { parseTranslationDocText } from '../lib/translationDoc';
 
@@ -15,6 +16,7 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
   const [pairings, setPairings] = useState<(string | null)[]>([]);
   const [unsupportedFile, setUnsupportedFile] = useState(false);
   const [pasteText, setPasteText] = useState('');
+  const [pageBreakMarker, setPageBreakMarker] = useState('');
 
   const startPairing = (paras: string[]) => {
     const initial = images.map((_, idx) => paras[idx] ?? null);
@@ -27,18 +29,33 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
     const file = e.target.files?.[0];
     if (!file) return;
     const lowerName = file.name.toLowerCase();
-    if (lowerName.endsWith('.doc') || lowerName.endsWith('.docx')) {
+
+    if (lowerName.endsWith('.docx')) {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        setUnsupportedFile(false);
+        startPairing(parseTranslationDocText(result.value, pageBreakMarker));
+      } catch (err) {
+        console.error('Failed to parse .docx file', err);
+        setUnsupportedFile(true);
+      }
+      return;
+    }
+
+    if (lowerName.endsWith('.doc')) {
       setUnsupportedFile(true);
       return;
     }
+
     setUnsupportedFile(false);
     const text = await file.text();
-    startPairing(parseTranslationDocText(text));
+    startPairing(parseTranslationDocText(text, pageBreakMarker));
   };
 
   const handlePasteConfirm = () => {
     if (!pasteText.trim()) return;
-    startPairing(parseTranslationDocText(pasteText));
+    startPairing(parseTranslationDocText(pasteText, pageBreakMarker));
   };
 
   const updatePairing = (index: number, value: string) => {
@@ -104,10 +121,24 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
               />
             </label>
 
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs text-slate-400">Page break marker (optional)</label>
+              <input
+                type="text"
+                value={pageBreakMarker}
+                onChange={(e) => setPageBreakMarker(e.target.value)}
+                placeholder="e.g. ===PAGE=== — leave blank to split on blank lines"
+                className="w-full bg-black/40 border border-sky-500/15 rounded-lg p-2.5 text-sm text-slate-200 focus:outline-none focus:border-sky-500/40"
+              />
+              <p className="text-[11px] text-slate-500">
+                If set, the document is split into pages wherever a line exactly matches this marker, instead of using blank lines to detect page breaks.
+              </p>
+            </div>
+
             {unsupportedFile && (
               <div className="flex flex-col gap-2 bg-blue-950/25 border border-sky-500/15 rounded-xl p-4">
                 <p className="text-xs text-amber-300">
-                  Only .txt files are currently supported — please paste the text below instead.
+                  .doc (legacy) isn't supported for direct parsing — please save as .docx or paste the text below.
                 </p>
                 <textarea
                   value={pasteText}
