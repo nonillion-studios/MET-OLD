@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Upload, Sparkles, ImagePlus, ChevronUp, ChevronDown, Trash2, Scissors, X } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Upload, Sparkles, ImagePlus, ChevronUp, ChevronDown, Trash2, Scissors, X, Plus } from 'lucide-react';
 import { ProcessedImage } from '../types';
 import { isLongPage, getImageDataFromDataUrl, computeSplitPlan, splitImageByRows } from '../lib/pageSplit';
 
@@ -17,9 +17,122 @@ interface UploadReviewModalProps {
   onClose: () => void;
 }
 
-interface SplitProposal {
-  cutRows: number[];
-  status: 'pending' | 'accepted' | 'skipped';
+interface SplitEditorProps {
+  img: ProcessedImage;
+  initialCutRows: number[];
+  onApply: (cutRows: number[]) => void;
+  onCancel: () => void;
+}
+
+/** Inline manual cut editor: full page thumbnail with draggable/removable horizontal cut lines. */
+function SplitEditor({ img, initialCutRows, onApply, onCancel }: SplitEditorProps) {
+  const [cutRows, setCutRows] = useState<number[]>(initialCutRows);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const draggingIndex = useRef<number | null>(null);
+
+  const clampRow = (y: number) => Math.min(Math.max(Math.round(y), 1), img.height - 1);
+
+  const rowToPercent = (row: number) => (row / img.height) * 100;
+
+  const yToRow = (clientY: number): number => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.height === 0) return 0;
+    const fraction = (clientY - rect.top) / rect.height;
+    return clampRow(fraction * img.height);
+  };
+
+  const handlePointerDown = (index: number) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    draggingIndex.current = index;
+    (e.target as Element).setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (draggingIndex.current === null) return;
+    const idx = draggingIndex.current;
+    const row = yToRow(e.clientY);
+    setCutRows(prev => {
+      const next = [...prev];
+      next[idx] = row;
+      return next;
+    });
+  };
+
+  const endDrag = () => {
+    if (draggingIndex.current === null) return;
+    draggingIndex.current = null;
+    // Re-sort so drag order can't create out-of-order cuts
+    setCutRows(prev => [...prev].sort((a, b) => a - b));
+  };
+
+  const addCut = () => {
+    const bounds = [0, ...[...cutRows].sort((a, b) => a - b), img.height];
+    let bestGapStart = 0;
+    let bestGapSize = -1;
+    for (let i = 0; i < bounds.length - 1; i++) {
+      const size = bounds[i + 1] - bounds[i];
+      if (size > bestGapSize) {
+        bestGapSize = size;
+        bestGapStart = bounds[i];
+      }
+    }
+    const newRow = clampRow(bestGapStart + bestGapSize / 2);
+    setCutRows(prev => [...prev, newRow].sort((a, b) => a - b));
+  };
+
+  const removeCut = (index: number) => {
+    setCutRows(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const sortedCuts = [...cutRows].sort((a, b) => a - b);
+
+  return (
+    <div className="mt-1 p-2 rounded-lg bg-purple-950/30 border border-purple-500/20 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[9px] text-purple-300 flex items-center gap-1">
+          <Scissors size={10} /> {sortedCuts.length + 1} pieces
+        </span>
+        <button onClick={addCut} className="text-[9px] bg-purple-700 hover:bg-purple-600 text-white rounded px-1.5 py-0.5 flex items-center gap-0.5">
+          <Plus size={10} /> Add Cut
+        </button>
+      </div>
+
+      <div
+        ref={containerRef}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        className="relative w-full select-none touch-none rounded overflow-hidden border border-purple-500/20"
+        style={{ aspectRatio: `${img.width} / ${img.height}` }}
+      >
+        <img src={img.dataUrl} alt={img.filename} className="w-full h-full object-cover pointer-events-none" draggable={false} />
+        {sortedCuts.map((row, i) => (
+          <div
+            key={i}
+            className="absolute left-0 right-0 flex items-center group"
+            style={{ top: `${rowToPercent(row)}%`, transform: 'translateY(-50%)', cursor: 'ns-resize' }}
+            onPointerDown={handlePointerDown(i)}
+          >
+            <div className="h-[3px] flex-1 bg-sky-400 shadow-[0_0_4px_rgba(56,189,248,0.9)]" />
+            <button
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); removeCut(i); }}
+              className="ml-1 bg-red-700 hover:bg-red-600 text-white rounded-full p-0.5 shrink-0"
+              title="Remove cut"
+            >
+              <X size={9} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-1">
+        <button onClick={() => onApply(sortedCuts)} className="flex-1 text-[9px] bg-emerald-700 hover:bg-emerald-600 text-white rounded py-1">Apply Split</button>
+        <button onClick={onCancel} className="flex-1 text-[9px] bg-[#222] hover:bg-[#333] text-white rounded py-1">Cancel</button>
+      </div>
+    </div>
+  );
 }
 
 export function UploadReviewModal({
@@ -36,29 +149,37 @@ export function UploadReviewModal({
   onClose
 }: UploadReviewModalProps) {
   const [step, setStep] = useState<'upload' | 'review'>(images.length > 0 ? 'review' : 'upload');
-  const [proposals, setProposals] = useState<Record<string, SplitProposal>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editInitialCuts, setEditInitialCuts] = useState<number[]>([]);
   const [computingId, setComputingId] = useState<string | null>(null);
+  const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
 
   const goToReview = () => setStep('review');
 
-  const detectSplit = async (img: ProcessedImage) => {
-    if (proposals[img.id]) return;
+  const openSplitEditor = async (img: ProcessedImage) => {
     setComputingId(img.id);
     try {
+      // Use the auto-detect algorithm purely as a starting suggestion; user can
+      // freely add/drag/remove cuts afterward.
       const imageData = await getImageDataFromDataUrl(img.dataUrl, img.width, img.height);
       const plan = computeSplitPlan(imageData, img.width, img.height);
-      setProposals(prev => ({ ...prev, [img.id]: { cutRows: plan.cutRows, status: 'pending' } }));
+      setEditInitialCuts(plan.cutRows);
     } catch (e) {
-      console.error('Split detection failed', e);
+      console.error('Split suggestion failed, defaulting to midpoint', e);
+      setEditInitialCuts([Math.round(img.height / 2)]);
     } finally {
       setComputingId(null);
+      setSkippedIds(prev => {
+        const next = new Set(prev);
+        next.delete(img.id);
+        return next;
+      });
+      setEditingId(img.id);
     }
   };
 
-  const acceptSplit = async (img: ProcessedImage) => {
-    const proposal = proposals[img.id];
-    if (!proposal) return;
-    const pieces = await splitImageByRows(img.dataUrl, img.width, img.height, img.mimeType, proposal.cutRows);
+  const applySplit = async (img: ProcessedImage, cutRows: number[]) => {
+    const pieces = await splitImageByRows(img.dataUrl, img.width, img.height, img.mimeType, cutRows);
     const groupId = 'split-' + Math.random().toString(36).substr(2, 9);
     const newEntries: ProcessedImage[] = pieces.map((piece, idx) => ({
       id: Math.random().toString(36).substr(2, 9),
@@ -81,15 +202,12 @@ export function UploadReviewModal({
       next.splice(idx, 1, ...newEntries);
       return next;
     });
-    setProposals(prev => {
-      const next = { ...prev };
-      delete next[img.id];
-      return next;
-    });
+    setEditingId(null);
   };
 
-  const skipSplit = (imgId: string) => {
-    setProposals(prev => ({ ...prev, [imgId]: { ...prev[imgId], status: 'skipped' } }));
+  const cancelSplitEditor = (imgId: string) => {
+    setEditingId(null);
+    setSkippedIds(prev => new Set(prev).add(imgId));
   };
 
   return (
@@ -195,7 +313,8 @@ export function UploadReviewModal({
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[50vh] overflow-y-auto pr-1">
               {images.map((img, i) => {
                 const long = isLongPage(img.width, img.height);
-                const proposal = proposals[img.id];
+                const isEditing = editingId === img.id;
+                const isSkipped = skippedIds.has(img.id);
                 return (
                   <div key={img.id} className="relative flex flex-col gap-1.5 p-2 rounded-xl bg-[#0b0819] border border-sky-500/10">
                     <div className="relative aspect-[3/4] w-full bg-black rounded overflow-hidden">
@@ -226,34 +345,29 @@ export function UploadReviewModal({
                       </button>
                     </div>
 
-                    {long && !img.splitGroupId && (
+                    {long && !img.splitGroupId && !isEditing && (
                       <div className="mt-1 p-1.5 rounded-lg bg-purple-950/30 border border-purple-500/20 flex flex-col gap-1.5">
                         <span className="text-[9px] text-purple-300 flex items-center gap-1">
                           <Scissors size={10} /> Long page detected
                         </span>
-                        {!proposal && (
-                          <button
-                            onClick={() => detectSplit(img)}
-                            disabled={computingId === img.id}
-                            className="text-[9px] bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white rounded py-1"
-                          >
-                            {computingId === img.id ? 'Analyzing…' : 'Preview Split'}
-                          </button>
-                        )}
-                        {proposal && proposal.status === 'pending' && (
-                          <div className="flex flex-col gap-1">
-                            <span className="text-[9px] text-slate-400">Proposed {proposal.cutRows.length + 1} pieces</span>
-                            <div className="flex gap-1">
-                              <button onClick={() => acceptSplit(img)} className="flex-1 text-[9px] bg-emerald-700 hover:bg-emerald-600 text-white rounded py-1">Accept</button>
-                              <button onClick={() => detectSplit(img)} className="flex-1 text-[9px] bg-[#222] hover:bg-[#333] text-white rounded py-1">Adjust</button>
-                              <button onClick={() => skipSplit(img.id)} className="flex-1 text-[9px] bg-[#222] hover:bg-[#333] text-white rounded py-1">Skip</button>
-                            </div>
-                          </div>
-                        )}
-                        {proposal && proposal.status === 'skipped' && (
-                          <span className="text-[9px] text-slate-500">Split skipped</span>
-                        )}
+                        <button
+                          onClick={() => openSplitEditor(img)}
+                          disabled={computingId === img.id}
+                          className="text-[9px] bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white rounded py-1"
+                        >
+                          {computingId === img.id ? 'Analyzing…' : 'Preview Split'}
+                        </button>
+                        {isSkipped && <span className="text-[9px] text-slate-500">Split skipped</span>}
                       </div>
+                    )}
+
+                    {isEditing && (
+                      <SplitEditor
+                        img={img}
+                        initialCutRows={editInitialCuts}
+                        onApply={(cutRows) => applySplit(img, cutRows)}
+                        onCancel={() => cancelSplitEditor(img.id)}
+                      />
                     )}
                   </div>
                 );

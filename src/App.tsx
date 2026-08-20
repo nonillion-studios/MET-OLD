@@ -1404,6 +1404,25 @@ export default function App() {
     setSelectedForProcess(newSet);
   };
 
+  // Builds a hint string for split-page cohesion: notes to the model that this image is
+  // part N of M of a longer vertical strip that was split, so bubbles near the top/bottom
+  // edge may continue from/into an adjacent part. Merges with any existing Translation Docs
+  // hint for the same page rather than overwriting it.
+  const buildSplitContextHint = (img: ProcessedImage, allImages: ProcessedImage[]): string | undefined => {
+    const existingHint = img.userTranslationHint && img.userTranslationHint.trim().length > 0
+      ? img.userTranslationHint.trim()
+      : undefined;
+
+    if (!img.splitGroupId) return existingHint;
+
+    const siblingCount = allImages.filter(i => i.splitGroupId === img.splitGroupId).length;
+    if (siblingCount <= 1) return existingHint;
+
+    const splitNote = `[Context: this image is part ${(img.splitIndex ?? 0) + 1} of ${siblingCount} of a longer vertical strip that was split for processing; bubbles near the top or bottom edge may continue from/into the adjacent part]`;
+
+    return existingHint ? `${existingHint}\n${splitNote}` : splitNote;
+  };
+
   const runParallelMangaTranslation = async (batch: ProcessedImage[]) => {
     const keysList = customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean);
     const keysToUse = keysList.length > 0 ? keysList : [''];
@@ -1443,7 +1462,7 @@ export default function App() {
           }));
 
           const chunkPageHints: PageHint[] = chunk
-            .map((img, idx) => ({ pageIndex: idx, hint: img.userTranslationHint || '' }))
+            .map((img, idx) => ({ pageIndex: idx, hint: buildSplitContextHint(img, images) || '' }))
             .filter(h => h.hint.trim().length > 0);
 
           const chunkResults = await translateWithProvider(
@@ -1541,8 +1560,9 @@ export default function App() {
         }
       }
 
-      const singlePageHints: PageHint[] | undefined = img.userTranslationHint && img.userTranslationHint.trim().length > 0
-        ? [{ pageIndex: 0, hint: img.userTranslationHint }]
+      const singleHintText = buildSplitContextHint(img, images);
+      const singlePageHints: PageHint[] | undefined = singleHintText && singleHintText.trim().length > 0
+        ? [{ pageIndex: 0, hint: singleHintText }]
         : undefined;
       const results = await translateWithProvider([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key, singlePageHints);
       const rawRegions = results[0]?.regions || [];
