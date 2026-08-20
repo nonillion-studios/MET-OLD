@@ -190,7 +190,7 @@ export function ImageEditor({
     const x = pos.x / scale;
     const y = pos.y / scale;
 
-    const initialColor = activeTool === 'erase' ? '#ffffff' : brushColor;
+    const initialColor = brushColor;
 
     setIsDrawing(true);
     setCurrentStroke({

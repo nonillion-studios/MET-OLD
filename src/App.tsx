@@ -116,6 +116,7 @@ export default function App() {
   const [showPageTextsModal, setShowPageTextsModal] = useState(false);
   const [showTranslationDocsModal, setShowTranslationDocsModal] = useState(false);
   const [showRightPanel, setShowRightPanel] = useState(false);
+  const [showLeftPanel, setShowLeftPanel] = useState(true);
   const [librarySearchQuery, setLibrarySearchQuery] = useState('');
   const filteredMangas = librarySearchQuery.trim()
     ? mangas.filter(m => m.title.toLowerCase().includes(librarySearchQuery.trim().toLowerCase()))
@@ -1916,207 +1917,6 @@ export default function App() {
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {showSettingsPage && (
-          <div className="flex-1 flex flex-col p-8 bg-gradient-to-tr from-[#03010c] via-[#0b0718] to-black relative overflow-y-auto pb-32">
-            <div className="absolute top-10 right-10 w-96 h-96 bg-blue-600/5 rounded-full blur-[140px] pointer-events-none" />
-            <div className="max-w-5xl mx-auto w-full flex flex-col gap-8 relative z-10">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h1 className="text-3xl font-display font-bold text-white tracking-tight">Studio Configuration Settings</h1>
-                  <p className="text-sm text-slate-400 mt-1">Fine-tune translation thresholds, OCR dialects, parallel execution caches, and Gemini API keys.</p>
-                </div>
-                <button
-                  onClick={() => setShowSettingsPage(false)}
-                  className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-all"
-                  aria-label="Close Settings"
-                >
-                  <X size={22} />
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-6">
-                {/* Config Panel */}
-                <div className="space-y-6">
-                  {/* AI Provider Box */}
-                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
-                    <h3 className="text-base font-semibold text-white font-display">AI Provider</h3>
-                    <select
-                      value={aiProvider}
-                      onChange={(e) => handleSetAiProvider(e.target.value as AIProvider)}
-                      className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 outline-none"
-                    >
-                      <option value="gemini">Gemini</option>
-                      <option value="ollama">Ollama (local)</option>
-                    </select>
-
-                    {aiProvider === 'gemini' ? (
-                      <div className="space-y-2">
-                        <label className="text-[11px] text-slate-400 font-mono">Display Name (cosmetic only)</label>
-                        <input
-                          type="text"
-                          value={geminiDisplayName}
-                          onChange={handleGeminiDisplayNameChange}
-                          placeholder="Gemini 2.5 Flash"
-                          className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
-                        />
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className="space-y-2">
-                          <label className="text-[11px] text-slate-400 font-mono">Ollama Endpoint URL</label>
-                          <input
-                            type="text"
-                            value={ollamaEndpoint}
-                            onChange={handleOllamaEndpointChange}
-                            placeholder="http://localhost:11434"
-                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-[11px] text-slate-400 font-mono">Ollama Model Name</label>
-                          <input
-                            type="text"
-                            value={ollamaModel}
-                            onChange={handleOllamaModelChange}
-                            placeholder="e.g. llava, bakllava, qwen2-vl"
-                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* API Key Box */}
-                  {aiProvider === 'gemini' && (
-                    <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
-                      <div className="flex justify-between items-center">
-                        <h3 className="text-base font-semibold text-white font-display">Gemini API Credentials</h3>
-                        {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length > 0 && (
-                          <span className="text-[11px] bg-blue-950/40 border border-blue-800 text-sky-400 px-2.5 py-0.5 rounded-full font-mono">
-                            {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length} Key(s) Loaded
-                          </span>
-                        )}
-                      </div>
-                      <textarea
-                        value={customApiKey}
-                        onChange={handleApiKeyChange}
-                        placeholder="Add keys (one key per line or comma-separated)..."
-                        className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-mono focus:ring-1 focus:ring-sky-500/20"
-                      />
-                      <div className="space-y-1.5 text-[11px] text-slate-400 leading-relaxed font-mono">
-                        <p>✧ Speed tip: Rotating several keys shares requests seamlessly to avoid rate limits safely.</p>
-                        <p>✧ Runs automatically on standard Gemini flash parameters to ensure prompt translations.</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Instructions Box */}
-                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
-                    <h3 className="text-base font-semibold text-white font-display">Custom Agent Prompting</h3>
-                    <textarea
-                      value={customInstructions}
-                      onChange={handleCustomInstructionsChange}
-                      placeholder="E.g., Translate to Egyptian dialect, keep humor puns, keep sound effects minimal, etc."
-                      className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-sans focus:ring-1 focus:ring-sky-500/20"
-                    />
-                    <p className="text-[11px] text-slate-400 font-mono">
-                      ✧ Custom instructions are passed directly to the Gemini neural vision matrix during page synthesis.
-                    </p>
-                  </div>
-
-                  {/* General Translation Guidance Box */}
-                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
-                    <h3 className="text-base font-semibold text-white font-display">General Translation Guidance</h3>
-                    <textarea
-                      value={generalTranslationGuidance}
-                      onChange={handleGeneralGuidanceChange}
-                      placeholder="E.g., Always keep honorifics, avoid slang, prefer formal Arabic, etc."
-                      className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-sans focus:ring-1 focus:ring-sky-500/20"
-                    />
-                    <p className="text-[11px] text-slate-400 font-mono">
-                      ✧ Unlike per-project Custom Agent Prompting, this guidance is always included in every request regardless of the selected AI provider.
-                    </p>
-                  </div>
-                </div>
-
-                {/* Toggle Rules */}
-                <div className="space-y-6">
-                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-5">
-                    <h3 className="text-base font-semibold text-white font-display">Optimization Rules</h3>
-                    
-                    <div className="space-y-4">
-                      {/* Checkboxes */}
-                      <label className="flex items-start gap-3 cursor-pointer group">
-                        <input 
-                          type="checkbox" 
-                          checked={translateJapanese} 
-                          onChange={(e) => handleSetTranslateJapanese(e.target.checked)}
-                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
-                        />
-                        <span className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Translate Japanese Content</span>
-                          <span className="text-[10px] text-slate-500 mt-0.5">Optimizes neural model parameters for Japanese language OCR streams.</span>
-                        </span>
-                      </label>
-
-                      <label className="flex items-start gap-3 cursor-pointer group">
-                        <input 
-                          type="checkbox" 
-                          checked={translateSfx} 
-                          onChange={(e) => handleSetTranslateSfx(e.target.checked)}
-                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
-                        />
-                        <span className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Translate Comic SFX</span>
-                          <span className="text-[10px] text-slate-500 mt-0.5">Translate small action sound effects alongside text blocks.</span>
-                        </span>
-                      </label>
-
-                      <label className="flex items-start gap-3 cursor-pointer group">
-                        <input 
-                          type="checkbox" 
-                          checked={autoFitAndCenter} 
-                          onChange={(e) => handleSetAutoFitAndCenter(e.target.checked)}
-                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
-                        />
-                        <span className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Auto Bubble Fit & Center</span>
-                          <span className="text-[10px] text-slate-500 mt-0.5">Automatically calculates text bounds to match speech balloon radii.</span>
-                        </span>
-                      </label>
-
-                      <label className="flex items-start gap-3 cursor-pointer group">
-                        <input 
-                          type="checkbox" 
-                          checked={compressBeforeProcessing} 
-                          onChange={(e) => handleSetCompressBeforeProcessing(e.target.checked)}
-                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
-                        />
-                        <span className="flex flex-col">
-                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Pre-Compress Plate Images</span>
-                          <span className="text-[10px] text-slate-500 mt-0.5">Reduces page sizes to achieve 3.5x faster analytical cycle times.</span>
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-3">
-                    <h4 className="text-sm font-semibold text-slate-200">Plates Mapping Mode</h4>
-                    <select 
-                      value={zipMatchMode}
-                      onChange={(e) => handleSetZipMatchMode(e.target.value as 'filename' | 'index')}
-                      className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 outline-none"
-                    >
-                      <option value="filename">Match by Filename (Recommended)</option>
-                      <option value="index">Match by Order Index</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {activeNavigationTab === 'library' && activeChapterId === null && (
           <div className="flex-1 flex flex-col p-8 bg-gradient-to-tr from-[#03010c] via-[#090615] to-black relative overflow-y-auto pb-32">
             <button
@@ -2625,7 +2425,7 @@ export default function App() {
         {activeNavigationTab === 'library' && activeChapterId !== null && images.length > 0 && (
           <>
             {/* Left Sidebar (Thumbnails) */}
-            <aside className="w-16 sm:w-48 md:w-64 shrink-0 border-r border-sky-500/10 bg-black/30 backdrop-blur-md flex flex-col overflow-y-auto glass-noise transition-all">
+            <aside className={`fixed inset-y-0 left-0 z-40 w-64 max-w-[85vw] transform transition-transform duration-300 ${showLeftPanel ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:z-auto md:w-64 shrink-0 border-r border-sky-500/10 bg-black/30 backdrop-blur-md flex flex-col overflow-y-auto glass-noise transition-all`}>
               <div className="flex items-center justify-center gap-2 p-2 border-b border-[#333]/50 shrink-0">
                 <button
                   onClick={() => {
@@ -2928,6 +2728,21 @@ export default function App() {
             </div>
           )}
         </main>
+
+        {/* Toggle button for left thumbnail panel on small viewports */}
+        <button
+          onClick={() => setShowLeftPanel(v => !v)}
+          className="md:hidden fixed bottom-24 left-4 z-40 p-3 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg"
+          title="Toggle Thumbnails Panel"
+        >
+          <ImageIcon size={18} />
+        </button>
+        {showLeftPanel && (
+          <div
+            className="fixed inset-0 bg-black/60 z-30 md:hidden"
+            onClick={() => setShowLeftPanel(false)}
+          />
+        )}
 
         {/* Toggle button for right properties panel on small viewports */}
         <button
@@ -3439,7 +3254,7 @@ export default function App() {
                       />
                     </div>
                     
-                    {activeTool === 'draw' && (
+                    {(activeTool === 'draw' || activeTool === 'erase') && (
                       <div className="space-y-2">
                         <label className="text-xs font-medium text-slate-400">Color</label>
                         <div className="flex items-center gap-2">
@@ -3526,6 +3341,209 @@ export default function App() {
               <line x1={5} y1={12} x2={19} y2={12} />
             </svg>
           </button>
+        </div>
+      )}
+
+      {showSettingsPage && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/85 backdrop-blur-md animate-fade-in p-4">
+          <div className="liquid-glass rounded-2xl border border-sky-500/25 max-h-[90vh] overflow-y-auto p-8 max-w-5xl w-full relative">
+            <div className="absolute top-10 right-10 w-96 h-96 bg-blue-600/5 rounded-full blur-[140px] pointer-events-none" />
+            <div className="w-full flex flex-col gap-8 relative z-10">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h1 className="text-3xl font-display font-bold text-white tracking-tight">Studio Configuration Settings</h1>
+                  <p className="text-sm text-slate-400 mt-1">Fine-tune translation thresholds, OCR dialects, parallel execution caches, and Gemini API keys.</p>
+                </div>
+                <button
+                  onClick={() => setShowSettingsPage(false)}
+                  className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-all"
+                  aria-label="Close Settings"
+                >
+                  <X size={22} />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-6">
+                {/* Config Panel */}
+                <div className="space-y-6">
+                  {/* AI Provider Box */}
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
+                    <h3 className="text-base font-semibold text-white font-display">AI Provider</h3>
+                    <select
+                      value={aiProvider}
+                      onChange={(e) => handleSetAiProvider(e.target.value as AIProvider)}
+                      className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 outline-none"
+                    >
+                      <option value="gemini">Gemini</option>
+                      <option value="ollama">Ollama (local)</option>
+                    </select>
+
+                    {aiProvider === 'gemini' ? (
+                      <div className="space-y-2">
+                        <label className="text-[11px] text-slate-400 font-mono">Display Name (cosmetic only)</label>
+                        <input
+                          type="text"
+                          value={geminiDisplayName}
+                          onChange={handleGeminiDisplayNameChange}
+                          placeholder="Gemini 2.5 Flash"
+                          className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                        />
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Ollama Endpoint URL</label>
+                          <input
+                            type="text"
+                            value={ollamaEndpoint}
+                            onChange={handleOllamaEndpointChange}
+                            placeholder="http://localhost:11434"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Ollama Model Name</label>
+                          <input
+                            type="text"
+                            value={ollamaModel}
+                            onChange={handleOllamaModelChange}
+                            placeholder="e.g. llava, bakllava, qwen2-vl"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* API Key Box */}
+                  {aiProvider === 'gemini' && (
+                    <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
+                      <div className="flex justify-between items-center">
+                        <h3 className="text-base font-semibold text-white font-display">Gemini API Credentials</h3>
+                        {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length > 0 && (
+                          <span className="text-[11px] bg-blue-950/40 border border-blue-800 text-sky-400 px-2.5 py-0.5 rounded-full font-mono">
+                            {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length} Key(s) Loaded
+                          </span>
+                        )}
+                      </div>
+                      <textarea
+                        value={customApiKey}
+                        onChange={handleApiKeyChange}
+                        placeholder="Add keys (one key per line or comma-separated)..."
+                        className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-mono focus:ring-1 focus:ring-sky-500/20"
+                      />
+                      <div className="space-y-1.5 text-[11px] text-slate-400 leading-relaxed font-mono">
+                        <p>✧ Speed tip: Rotating several keys shares requests seamlessly to avoid rate limits safely.</p>
+                        <p>✧ Runs automatically on standard Gemini flash parameters to ensure prompt translations.</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Instructions Box */}
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
+                    <h3 className="text-base font-semibold text-white font-display">Custom Agent Prompting</h3>
+                    <textarea
+                      value={customInstructions}
+                      onChange={handleCustomInstructionsChange}
+                      placeholder="E.g., Translate to Egyptian dialect, keep humor puns, keep sound effects minimal, etc."
+                      className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-sans focus:ring-1 focus:ring-sky-500/20"
+                    />
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      ✧ Custom instructions are passed directly to the Gemini neural vision matrix during page synthesis.
+                    </p>
+                  </div>
+
+                  {/* General Translation Guidance Box */}
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
+                    <h3 className="text-base font-semibold text-white font-display">General Translation Guidance</h3>
+                    <textarea
+                      value={generalTranslationGuidance}
+                      onChange={handleGeneralGuidanceChange}
+                      placeholder="E.g., Always keep honorifics, avoid slang, prefer formal Arabic, etc."
+                      className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-sans focus:ring-1 focus:ring-sky-500/20"
+                    />
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      ✧ Unlike per-project Custom Agent Prompting, this guidance is always included in every request regardless of the selected AI provider.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Toggle Rules */}
+                <div className="space-y-6">
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-5">
+                    <h3 className="text-base font-semibold text-white font-display">Optimization Rules</h3>
+
+                    <div className="space-y-4">
+                      {/* Checkboxes */}
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={translateJapanese}
+                          onChange={(e) => handleSetTranslateJapanese(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Translate Japanese Content</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Optimizes neural model parameters for Japanese language OCR streams.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={translateSfx}
+                          onChange={(e) => handleSetTranslateSfx(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Translate Comic SFX</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Translate small action sound effects alongside text blocks.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={autoFitAndCenter}
+                          onChange={(e) => handleSetAutoFitAndCenter(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Auto Bubble Fit & Center</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Automatically calculates text bounds to match speech balloon radii.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={compressBeforeProcessing}
+                          onChange={(e) => handleSetCompressBeforeProcessing(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Pre-Compress Plate Images</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Reduces page sizes to achieve 3.5x faster analytical cycle times.</span>
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-3">
+                    <h4 className="text-sm font-semibold text-slate-200">Plates Mapping Mode</h4>
+                    <select
+                      value={zipMatchMode}
+                      onChange={(e) => handleSetZipMatchMode(e.target.value as 'filename' | 'index')}
+                      className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 outline-none"
+                    >
+                      <option value="filename">Match by Filename (Recommended)</option>
+                      <option value="index">Match by Order Index</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
