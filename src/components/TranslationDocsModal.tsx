@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { ChevronUp, ChevronDown, X, FileText, Upload, BookOpen, List } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ChevronUp, ChevronDown, X, FileText, Upload, BookOpen, List, MapPin, Flag } from 'lucide-react';
 import mammoth from 'mammoth';
 import { ProcessedImage } from '../types';
 import { parseTranslationDocText, detectPageMarkers } from '../lib/translationDoc';
@@ -46,22 +46,81 @@ function splitIntoBlocks(fileText: string): { text: string; start: number; end: 
   return blocks;
 }
 
+const STORAGE_KEY = 'manga_translation_docs_state';
+
+interface StoredDocState {
+  step: 1 | 2;
+  viewMode: 'list' | 'paper';
+  docText: string;
+  paragraphs: string[];
+  pairings: (string | null)[];
+  pageBreakMarker: string;
+  pageRanges: (({ startBlock: number; endBlock: number }) | null)[];
+}
+
+function loadStoredDocState(): StoredDocState | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.docText !== 'string' || !parsed.docText) return null;
+    return parsed as StoredDocState;
+  } catch {
+    return null;
+  }
+}
+
 export function TranslationDocsModal({ images, onConfirm, onClose }: TranslationDocsModalProps) {
-  const [step, setStep] = useState<1 | 2>(1);
-  const [viewMode, setViewMode] = useState<'list' | 'paper'>('list');
-  const [docText, setDocText] = useState('');
-  const [paragraphs, setParagraphs] = useState<string[]>([]);
-  const [pairings, setPairings] = useState<(string | null)[]>([]);
+  const stored = useMemo(() => loadStoredDocState(), []);
+
+  const [step, setStep] = useState<1 | 2>(stored ? 2 : 1);
+  const [viewMode, setViewMode] = useState<'list' | 'paper'>(stored?.viewMode || 'list');
+  const [docText, setDocText] = useState(stored?.docText || '');
+  const [paragraphs, setParagraphs] = useState<string[]>(stored?.paragraphs || []);
+  const [pairings, setPairings] = useState<(string | null)[]>(stored?.pairings || []);
   const [unsupportedFile, setUnsupportedFile] = useState(false);
   const [pasteText, setPasteText] = useState('');
-  const [pageBreakMarker, setPageBreakMarker] = useState('');
+  const [pageBreakMarker, setPageBreakMarker] = useState(stored?.pageBreakMarker || '');
 
   // Paper View state: which page (index into `images`) is currently being marked, the
   // block-index start/end pointers for each page, and the block list for the full doc text.
   const [activePageIdx, setActivePageIdx] = useState(0);
-  const [pageRanges, setPageRanges] = useState<(({ startBlock: number; endBlock: number }) | null)[]>([]);
+  const [pageRanges, setPageRanges] = useState<(({ startBlock: number; endBlock: number }) | null)[]>(stored?.pageRanges || []);
+
+  // Pin mode: mark a start pin on one line, an end pin on another (in either order,
+  // independent of the active-page thumbnail selector above), then confirm which page
+  // number the resulting range belongs to via a small inline prompt.
+  const [pinMode, setPinMode] = useState(false);
+  const [pinStart, setPinStart] = useState<number | null>(null);
+  const [pinEnd, setPinEnd] = useState<number | null>(null);
+  const [pinPageNumberInput, setPinPageNumberInput] = useState('');
 
   const blocks = useMemo(() => splitIntoBlocks(docText), [docText]);
+
+  // Persist doc state across modal close/reopen so the user never has to re-upload the
+  // file just to keep working on the pairing - only cleared explicitly via "Upload New".
+  useEffect(() => {
+    if (!docText) return;
+    const toStore: StoredDocState = { step, viewMode, docText, paragraphs, pairings, pageBreakMarker, pageRanges };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore));
+    } catch {
+      // ignore storage errors (e.g. quota) - persistence is a convenience, not critical
+    }
+  }, [step, viewMode, docText, paragraphs, pairings, pageBreakMarker, pageRanges]);
+
+  const startOver = () => {
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    setStep(1);
+    setViewMode('list');
+    setDocText('');
+    setParagraphs([]);
+    setPairings([]);
+    setPageRanges([]);
+    setPinStart(null);
+    setPinEnd(null);
+    setPinPageNumberInput('');
+  };
 
   const startPairing = (paras: string[], fullText: string) => {
     const initial = images.map((_, idx) => paras[idx] ?? null);
@@ -189,6 +248,45 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
     }
   };
 
+  // Pin mode: clicking a pin icon on a block sets whichever pin isn't set yet (start
+  // first, then end, in click order - either pin can be placed first since we sort by
+  // block index when building the range). Once both are set, an inline prompt asks
+  // which page number the range belongs to.
+  const handlePinClick = (blockIdx: number) => {
+    if (pinStart === null) {
+      setPinStart(blockIdx);
+    } else if (pinEnd === null && blockIdx !== pinStart) {
+      setPinEnd(blockIdx);
+      setPinPageNumberInput('');
+    } else {
+      // Both already set (or clicked the same block twice) - restart with this as the new start.
+      setPinStart(blockIdx);
+      setPinEnd(null);
+      setPinPageNumberInput('');
+    }
+  };
+
+  const confirmPinPairing = () => {
+    const pageNum = parseInt(pinPageNumberInput, 10);
+    if (!pageNum || pageNum < 1 || pageNum > images.length || pinStart === null || pinEnd === null) return;
+    const pageIdx = pageNum - 1;
+    const startBlock = Math.min(pinStart, pinEnd);
+    const endBlock = Math.max(pinStart, pinEnd);
+    const text = blocks.slice(startBlock, endBlock + 1).map(b => b.text).join('\n\n').trim();
+
+    setPageRanges(prev => prev.map((r, i) => (i === pageIdx ? { startBlock, endBlock } : r)));
+    setPairings(prev => prev.map((p, i) => (i === pageIdx ? text : p)));
+    setPinStart(null);
+    setPinEnd(null);
+    setPinPageNumberInput('');
+  };
+
+  const cancelPinPairing = () => {
+    setPinStart(null);
+    setPinEnd(null);
+    setPinPageNumberInput('');
+  };
+
   const handleConfirm = () => {
     const result = images
       .map((img, idx) => ({ imageId: img.id, hint: (pairings[idx] || '').trim() }))
@@ -301,6 +399,22 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
               >
                 <BookOpen size={14} /> Paper View
               </button>
+              {viewMode === 'paper' && (
+                <button
+                  onClick={() => { setPinMode(v => !v); setPinStart(null); setPinEnd(null); setPinPageNumberInput(''); }}
+                  title="Mark a start pin and an end pin anywhere, then assign the range to a page number"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${pinMode ? 'bg-emerald-600 text-white' : 'bg-[#111] text-slate-400 hover:text-white'}`}
+                >
+                  <MapPin size={14} /> Pin Mode
+                </button>
+              )}
+              <button
+                onClick={startOver}
+                title="Discard this document and upload a new one"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-slate-400 hover:text-white bg-[#111] hover:bg-[#222] transition-colors"
+              >
+                <Upload size={14} /> Upload New
+              </button>
               {extraParagraphsCount > 0 && viewMode === 'list' && (
                 <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-1.5 ml-auto">
                   {extraParagraphsCount} extra paragraph(s) beyond the number of pages were dropped.
@@ -389,9 +503,47 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
 
                 <div className="flex-1 flex flex-col gap-2 min-h-0">
                   <p className="text-[11px] text-slate-400 shrink-0">
-                    Marking text for <span className="text-sky-300 font-medium">Page {activePageIdx + 1}</span> ({images[activePageIdx]?.filename}).
-                    Click a paragraph to set the start point, then click another to set the end point. Click the highlighted page dot on the strip to re-select and adjust.
+                    {pinMode ? (
+                      pinStart === null
+                        ? 'Pin Mode: click the pin icon beside a line to set the START point.'
+                        : pinEnd === null
+                          ? 'Now click another line\'s pin icon to set the END point.'
+                          : 'Range marked — choose a page number below to pair it.'
+                    ) : (
+                      <>
+                        Marking text for <span className="text-sky-300 font-medium">Page {activePageIdx + 1}</span> ({images[activePageIdx]?.filename}).
+                        Click a paragraph to set the start point, then click another to set the end point. Click the highlighted page dot on the strip to re-select and adjust.
+                      </>
+                    )}
                   </p>
+                  {pinMode && pinStart !== null && pinEnd !== null && (
+                    <div className="flex items-center gap-2 bg-emerald-950/30 border border-emerald-500/25 rounded-lg px-3 py-2 shrink-0">
+                      <span className="text-xs text-emerald-300">Assign this range to page:</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={images.length}
+                        value={pinPageNumberInput}
+                        onChange={(e) => setPinPageNumberInput(e.target.value)}
+                        placeholder={`1-${images.length}`}
+                        className="w-20 bg-black/40 border border-emerald-500/25 rounded-md px-2 py-1 text-sm text-slate-200 focus:outline-none focus:border-emerald-400"
+                        autoFocus
+                      />
+                      <button
+                        onClick={confirmPinPairing}
+                        disabled={!pinPageNumberInput || Number(pinPageNumberInput) < 1 || Number(pinPageNumberInput) > images.length}
+                        className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-600/40 disabled:cursor-not-allowed px-3 py-1 rounded-md text-xs font-medium text-white transition-colors"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={cancelPinPairing}
+                        className="bg-[#111] hover:bg-[#222] px-3 py-1 rounded-md text-xs font-medium text-slate-300 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                   <div className="flex-1 overflow-y-auto rounded-lg bg-slate-700/30 p-4 sm:p-8">
                     <div
                       className="mx-auto max-w-[210mm] min-h-[100px] bg-[#f8f4ec] text-[#1a1a1a] rounded-sm shadow-2xl px-6 py-8 sm:px-12 sm:py-10 font-serif leading-relaxed text-[13px] sm:text-sm"
@@ -404,15 +556,26 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
                         const owningPage = blockPageIndex(idx);
                         const isActiveRangeStart = pageRanges[activePageIdx]?.startBlock === idx && pageRanges[activePageIdx]?.endBlock === -1;
                         const colorClass = owningPage !== null ? highlightPalette[owningPage % highlightPalette.length] : '';
+                        const isPinStart = pinMode && pinStart === idx;
+                        const isPinEnd = pinMode && pinEnd === idx;
                         return (
                           <p
                             key={idx}
-                            onClick={() => handleBlockClick(idx)}
-                            className={`cursor-pointer whitespace-pre-wrap mb-3 px-1.5 py-1 rounded transition-colors hover:bg-sky-200/40 ${colorClass} ${
+                            onClick={() => (pinMode ? undefined : handleBlockClick(idx))}
+                            className={`group relative whitespace-pre-wrap mb-3 px-1.5 py-1 rounded transition-colors ${pinMode ? '' : 'cursor-pointer hover:bg-sky-200/40'} ${colorClass} ${
                               isActiveRangeStart ? 'ring-2 ring-sky-500' : ''
-                            }`}
-                            title={owningPage !== null ? `Assigned to page ${owningPage + 1}` : 'Click to assign to the selected page'}
+                            } ${isPinStart ? 'ring-2 ring-emerald-500' : ''} ${isPinEnd ? 'ring-2 ring-rose-500' : ''}`}
+                            title={pinMode ? undefined : (owningPage !== null ? `Assigned to page ${owningPage + 1}` : 'Click to assign to the selected page')}
                           >
+                            {pinMode && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handlePinClick(idx); }}
+                                title={isPinStart ? 'Start pin' : isPinEnd ? 'End pin' : 'Set pin here'}
+                                className={`absolute -left-7 top-1 opacity-40 group-hover:opacity-100 transition-opacity ${isPinStart ? 'text-emerald-600 opacity-100' : isPinEnd ? 'text-rose-600 opacity-100' : 'text-slate-500'}`}
+                              >
+                                {isPinEnd ? <Flag size={16} /> : <MapPin size={16} />}
+                              </button>
+                            )}
                             {block.text}
                           </p>
                         );

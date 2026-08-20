@@ -38,7 +38,7 @@ export interface DetectedPageMarker {
 // "pg1", "pg 1", "pg.1", "page 1", "page1", "p1", "p.1", "p 1", "#1" — case-insensitive.
 // Anchored to line start (via the 'm' flag + ^) so it never matches a number embedded
 // mid-sentence; the captured group is the page number.
-const PAGE_MARKER_RE = /^(?:pg\.?\s*|page\s*|p\.?\s*|#)(\d+)\b/gim;
+const PAGE_MARKER_RE = /^\s*(?:pg\.?|page|p\.?|#)[\s:_-]*(\d+)\s*[:.)\-]?\s*$/gim;
 
 // Scans the document for page-marker lines (see PAGE_MARKER_RE) and slices the text
 // between consecutive markers into per-page chunks. Returns [] if no markers are found,
