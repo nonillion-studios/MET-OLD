@@ -20,6 +20,8 @@ export default function App() {
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
+  const [bubbleFillPreview, setBubbleFillPreview] = useState<{ imgId: string, regions: Region[] } | null>(null);
+  const [isGeneratingBubbleFillPreview, setIsGeneratingBubbleFillPreview] = useState(false);
   const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   const [selectedForProcess, setSelectedForProcess] = useState<Set<string>>(new Set());
@@ -586,7 +588,7 @@ export default function App() {
     let formatted = cleanText;
     if (style === 'oval') {
       const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
-      const extendableArabicLetters = /[ابتثجحخدرزسشصضطظعغفقمنهويىئؤأإ]/;
+      const extendableArabicLetters = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
 
       // Throwaway single-line measurement node (no width constraint) to greedily pack
       // words into visual lines the same way calculateAutoFitFontSize measures text.
@@ -624,14 +626,22 @@ export default function App() {
         lines.push(currentLine);
       }
 
-      // Find the widest line's width as the justification target.
+      // Find the widest line's width as the profile's peak reference.
       const lineWidths = lines.map(l => measureWidth(l));
-      const targetWidth = Math.max(0, ...lineWidths);
+      const maxLineWidth = Math.max(0, ...lineWidths);
+      const n = lines.length;
+      // Per-line oval/lens target: first/last lines target ~65% of max width,
+      // middle lines approach the full width, tapering like an oval bubble.
+      const lineTargets = n > 1
+        ? lines.map((_, i) => maxLineWidth * (0.65 + 0.35 * Math.sin(Math.PI * (i + 0.5) / n)))
+        : lineWidths.slice();
 
       const justifiedLines = lines.map((line, idx) => {
         if (!line) return line;
+        if (n <= 1) return line;
         let width = lineWidths[idx];
-        // Only stretch lines meaningfully narrower than the target line.
+        const targetWidth = lineTargets[idx];
+        // Only stretch lines meaningfully narrower than this line's own target.
         if (targetWidth <= 0 || width >= targetWidth * 0.95) return line;
 
         const words = line.split(' ');
@@ -667,7 +677,11 @@ export default function App() {
       formatted = justifiedLines.join('\n');
     }
 
-    updateRegion(region.id, { translatedText: formatted });
+    if (style === 'oval') {
+      updateRegion(region.id, { translatedText: formatted, textAlign: 'center' });
+    } else {
+      updateRegion(region.id, { translatedText: formatted });
+    }
 
     Swal.fire({
       icon: 'success',
@@ -1018,6 +1032,72 @@ export default function App() {
     } else {
       alert("Could not automatically detect the bubble bounds.");
     }
+  };
+
+  // Pure computation: detects new bounds/contours for every bubble region on the page
+  // but does NOT mutate state or history — callers decide when/whether to apply the result.
+  const computeBubbleFillPreview = async (imgId: string): Promise<{ id: string, newRegions: Region[], changed: boolean } | null> => {
+    const img = images.find(i => i.id === imgId);
+    if (!img) return null;
+
+    // Use the whitened/inpainted image dataUrl strictly so text strokes don't block flood fill
+    const imgSrc = img.dataUrl;
+    const imageObj = new Image();
+    imageObj.src = imgSrc;
+    await new Promise(resolve => imageObj.onload = resolve);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = imageObj.width;
+    canvas.height = imageObj.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.drawImage(imageObj, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    const newRegions = [...img.regions];
+    let changed = false;
+
+    for (let i = 0; i < newRegions.length; i++) {
+      const region = newRegions[i];
+      if (region.type === 'bubble') {
+        const startX = Math.floor(region.x + region.width / 2);
+        const startY = Math.floor(region.y + region.height / 2);
+        const result = floodFillBubbleDetailed(imageData, startX, startY, region.width, region.height);
+        if (result) {
+          newRegions[i] = {
+            ...region,
+            ...result.safeTextBounds,
+            bubbleContour: result.contour,
+            textAlign: 'center'
+          };
+          changed = true;
+        }
+      }
+    }
+
+    return { id: img.id, newRegions, changed };
+  };
+
+  const handleGenerateBubbleFillPreview = async (imgId: string) => {
+    setIsGeneratingBubbleFillPreview(true);
+    try {
+      const result = await computeBubbleFillPreview(imgId);
+      if (result && result.changed) {
+        setBubbleFillPreview({ imgId: result.id, regions: result.newRegions });
+      } else {
+        alert("No text bubbles were detected for dynamic improvement on this page.");
+      }
+    } finally {
+      setIsGeneratingBubbleFillPreview(false);
+    }
+  };
+
+  const handleApplyBubbleFillPreview = () => {
+    if (!bubbleFillPreview) return;
+    saveHistory(bubbleFillPreview.imgId);
+    updateImage(bubbleFillPreview.imgId, { regions: bubbleFillPreview.regions });
+    setBubbleFillPreview(null);
   };
 
   const handleCenterText = (regionId: string) => {
@@ -2617,6 +2697,36 @@ export default function App() {
                       >
                         <Plus size={14} /> Add Text
                       </button>
+                      {isGeneratingBubbleFillPreview ? (
+                        <div className="flex items-center gap-1.5 bg-sky-900/40 px-3 py-1.5 rounded text-xs font-medium text-sky-200 border border-sky-800/50">
+                          <Loader2 size={14} className="animate-spin" /> Detecting bubble boxes...
+                        </div>
+                      ) : bubbleFillPreview && bubbleFillPreview.imgId === selectedImage.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={handleApplyBubbleFillPreview}
+                            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 rounded text-xs font-medium transition-colors text-white"
+                            title="Apply detected bubble bounds"
+                          >
+                            <Wand2 size={14} /> Apply
+                          </button>
+                          <button
+                            onClick={() => setBubbleFillPreview(null)}
+                            className="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded text-xs font-medium transition-colors text-slate-200"
+                            title="Discard preview"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleGenerateBubbleFillPreview(selectedImage.id)}
+                          className="flex items-center gap-1.5 bg-sky-900/40 hover:bg-sky-800 px-3 py-1.5 rounded text-xs font-medium transition-colors text-sky-200 border border-sky-800/50"
+                          title="Smart Center All Text Bubbles"
+                        >
+                          <Wand2 size={14} /> Center All Bubbles
+                        </button>
+                      )}
                       <button 
                         onClick={() => {
                           if (selectedForProcess.size > 0) {
@@ -2651,6 +2761,9 @@ export default function App() {
                       paintStrokes: [...selectedImage.paintStrokes, stroke]
                     });
                   }}
+                  previewRegions={bubbleFillPreview && bubbleFillPreview.imgId === selectedImage.id
+                    ? bubbleFillPreview.regions.filter(r => r.type === 'bubble')
+                    : undefined}
                 />
               </Suspense>
             </div>

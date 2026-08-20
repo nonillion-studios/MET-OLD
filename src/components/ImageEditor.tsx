@@ -17,6 +17,7 @@ interface ImageEditorProps {
   zoom: number;
   showOriginal?: boolean;
   onAddStroke: (stroke: PaintStroke) => void;
+  previewRegions?: Region[];
 }
 
 const AutoFitText = ({ region, pageHeight }: { region: Region; pageHeight: number }) => {
@@ -123,6 +124,7 @@ export function ImageEditor({
   zoom,
   showOriginal,
   onAddStroke,
+  previewRegions,
 }: ImageEditorProps) {
   const bgToUse = showOriginal && image.originalDataUrl ? image.originalDataUrl : image.dataUrl;
   const [img] = useImage(bgToUse);
@@ -396,6 +398,45 @@ export function ImageEditor({
                     }}
                   />
                 )}
+              </Layer>
+            )}
+
+            {/* Layer 4: Bubble-fill preview overlay (blue, non-interactive) */}
+            {previewRegions && previewRegions.length > 0 && (
+              <Layer listening={false}>
+                {previewRegions.map((region) => {
+                  const contour = (region as any).bubbleContour;
+                  if (contour && contour.length > 0) {
+                    return (
+                      <Line
+                        key={`preview-${region.id}`}
+                        points={contour}
+                        closed={true}
+                        stroke="#38bdf8"
+                        strokeWidth={2}
+                        dash={[6, 4]}
+                        fill="rgba(56,189,248,0.12)"
+                        lineJoin="round"
+                        lineCap="round"
+                        listening={false}
+                      />
+                    );
+                  }
+                  return (
+                    <Rect
+                      key={`preview-${region.id}`}
+                      x={region.x}
+                      y={region.y}
+                      width={region.width}
+                      height={region.height}
+                      stroke="#38bdf8"
+                      strokeWidth={2}
+                      dash={[6, 4]}
+                      fill="rgba(56,189,248,0.12)"
+                      listening={false}
+                    />
+                  );
+                })}
               </Layer>
             )}
           </Stage>
