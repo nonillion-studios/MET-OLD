@@ -1,9 +1,15 @@
+export interface PageHint {
+  pageIndex: number;
+  hint: string;
+}
+
 export interface BuildTypesettingPromptOptions {
   pageCount: number;
   customInstructions?: string;
   generalGuidance?: string;
   translateJapanese?: boolean;
   translateSfx?: boolean;
+  pageHints?: PageHint[];
 }
 
 export function buildTypesettingPrompt({
@@ -12,6 +18,7 @@ export function buildTypesettingPrompt({
   generalGuidance,
   translateJapanese,
   translateSfx,
+  pageHints,
 }: BuildTypesettingPromptOptions): string {
   let textPrompt = `You are an expert manga translator and professional typesetter.
 I am providing ${pageCount} manga page(s). Analyze EACH page independently.
@@ -34,6 +41,7 @@ For each page, detect all speech bubbles, narrative text, and sound effects (SFX
     - lineHeight: usually 1.2 to 1.5.
 
 ${generalGuidance ? `Additional Instructions from User:\n${generalGuidance}\n` : ""}${customInstructions ? `Additional Instructions from User:\n${customInstructions}\n` : ""}
+${pageHints && pageHints.length > 0 ? `Reference translations provided by the user for specific pages (page index → text), use these as the ground-truth translation for that page instead of generating your own:\n${pageHints.map(h => `[page ${h.pageIndex}]: ${h.hint}`).join('\n')}\n` : ""}
 Return ONLY a JSON array of objects, one for each page, in the EXACT order they were provided.
 Schema: [ { "pageIndex": 0, "regions": [ ... ] } ]`;
 

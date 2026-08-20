@@ -1,15 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import Konva from 'konva';
-import { Upload, Download, Play, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, ZoomIn, ZoomOut, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Sparkles, Undo, Redo, Wand2, Scissors, Settings, Search, X } from 'lucide-react';
+import { Upload, Download, Play, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, ZoomIn, ZoomOut, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Sparkles, Undo, Redo, Wand2, Scissors, Settings, Search, X, FileText } from 'lucide-react';
 import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingleImage } from './lib/zip';
 import { processMangaPages, RawRegion } from './lib/gemini';
 import { processMangaPagesOllama } from './lib/ollama';
-import { buildTypesettingPrompt } from './lib/prompt';
+import { buildTypesettingPrompt, PageHint } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
 import { mapRawRegionToPixels } from './utils/textUtils';
 import { UploadReviewModal } from './components/UploadReviewModal';
 import { PageTextsModal } from './components/PageTextsModal';
+import { TranslationDocsModal } from './components/TranslationDocsModal';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -113,6 +114,7 @@ export default function App() {
   const [showSettingsPage, setShowSettingsPage] = useState(false);
   const [showManagePages, setShowManagePages] = useState(false);
   const [showPageTextsModal, setShowPageTextsModal] = useState(false);
+  const [showTranslationDocsModal, setShowTranslationDocsModal] = useState(false);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [librarySearchQuery, setLibrarySearchQuery] = useState('');
   const filteredMangas = librarySearchQuery.trim()
@@ -224,7 +226,8 @@ export default function App() {
 
   const translateWithProvider = async (
     pages: { id: string, base64Image: string, mimeType: string }[],
-    geminiKey?: string
+    geminiKey?: string,
+    pageHints?: PageHint[]
   ): Promise<{ id: string, regions: RawRegion[] }[]> => {
     if (aiProvider === 'ollama') {
       return processMangaPagesOllama(
@@ -234,7 +237,8 @@ export default function App() {
         customInstructions,
         generalTranslationGuidance,
         translateJapanese,
-        translateSfx
+        translateSfx,
+        pageHints
       );
     }
     return processMangaPages(
@@ -243,7 +247,8 @@ export default function App() {
       customInstructions,
       translateJapanese,
       translateSfx,
-      generalTranslationGuidance
+      generalTranslationGuidance,
+      pageHints
     );
   };
 
@@ -1272,9 +1277,14 @@ export default function App() {
             return { id: img.id, base64Image: imgBase64, mimeType };
           }));
 
+          const chunkPageHints: PageHint[] = chunk
+            .map((img, idx) => ({ pageIndex: idx, hint: img.userTranslationHint || '' }))
+            .filter(h => h.hint.trim().length > 0);
+
           const chunkResults = await translateWithProvider(
             processedPages,
-            key
+            key,
+            chunkPageHints.length > 0 ? chunkPageHints : undefined
           );
           
           await Promise.all(chunkResults.map(async result => {
@@ -1363,7 +1373,10 @@ export default function App() {
         }
       }
 
-      const results = await translateWithProvider([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key);
+      const singlePageHints: PageHint[] | undefined = img.userTranslationHint && img.userTranslationHint.trim().length > 0
+        ? [{ pageIndex: 0, hint: img.userTranslationHint }]
+        : undefined;
+      const results = await translateWithProvider([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key, singlePageHints);
       const rawRegions = results[0]?.regions || [];
       
       const newRegions: Region[] = rawRegions.map(raw => {
@@ -1844,6 +1857,13 @@ export default function App() {
               title="All Texts in Page"
             >
               <TypeIcon size={16} /> <span className="hidden sm:inline">All Texts</span>
+            </button>
+            <button
+              onClick={() => setShowTranslationDocsModal(true)}
+              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300"
+              title="Translation Docs"
+            >
+              <FileText size={16} /> <span className="hidden sm:inline">Translation Docs</span>
             </button>
           </div>
 
@@ -3534,6 +3554,19 @@ export default function App() {
             setSelectedRegionId(id);
             if (activeTool !== 'select') setActiveTool('select');
             setShowPageTextsModal(false);
+          }}
+        />
+      )}
+
+      {showTranslationDocsModal && (
+        <TranslationDocsModal
+          images={images}
+          onClose={() => setShowTranslationDocsModal(false)}
+          onConfirm={(pairings) => {
+            pairings.forEach(p => {
+              updateImage(p.imageId, { userTranslationHint: p.hint });
+            });
+            setShowTranslationDocsModal(false);
           }}
         />
       )}

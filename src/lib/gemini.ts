@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Region } from "../types";
-import { buildTypesettingPrompt } from "./prompt";
+import { buildTypesettingPrompt, PageHint } from "./prompt";
 
 export interface RawRegion {
   type: "bubble" | "sfx";
@@ -61,7 +61,7 @@ export async function generateInpaint(base64Image: string, mimeType: string, cus
   throw new Error("Failed to generate inpaint image.");
 }
 
-export async function processMangaPages(pages: { id: string, base64Image: string, mimeType: string }[], customApiKey?: string, customInstructions?: string, translateJapanese?: boolean, translateSfx?: boolean, generalGuidance?: string): Promise<{ id: string, regions: RawRegion[] }[]> {
+export async function processMangaPages(pages: { id: string, base64Image: string, mimeType: string }[], customApiKey?: string, customInstructions?: string, translateJapanese?: boolean, translateSfx?: boolean, generalGuidance?: string, pageHints?: PageHint[]): Promise<{ id: string, regions: RawRegion[] }[]> {
   const key = customApiKey;
   if (!key) {
     throw new Error("API Key is required");
@@ -74,6 +74,7 @@ export async function processMangaPages(pages: { id: string, base64Image: string
     generalGuidance,
     translateJapanese,
     translateSfx,
+    pageHints,
   });
 
   const contents: any[] = [

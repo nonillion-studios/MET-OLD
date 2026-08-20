@@ -1,5 +1,5 @@
 import { RawRegion } from "./gemini";
-import { buildTypesettingPrompt } from "./prompt";
+import { buildTypesettingPrompt, PageHint } from "./prompt";
 
 export async function processMangaPagesOllama(
   pages: { id: string, base64Image: string, mimeType: string }[],
@@ -8,7 +8,8 @@ export async function processMangaPagesOllama(
   customInstructions?: string,
   generalGuidance?: string,
   translateJapanese?: boolean,
-  translateSfx?: boolean
+  translateSfx?: boolean,
+  pageHints?: PageHint[]
 ): Promise<{ id: string, regions: RawRegion[] }[]> {
   if (!endpoint) {
     throw new Error("Ollama endpoint is required");
@@ -16,14 +17,6 @@ export async function processMangaPagesOllama(
   if (!model) {
     throw new Error("Ollama model name is required");
   }
-
-  const basePrompt = buildTypesettingPrompt({
-    pageCount: 1,
-    customInstructions,
-    generalGuidance,
-    translateJapanese,
-    translateSfx,
-  });
 
   const schemaInstructions = `
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) of region objects for THIS single page, matching EXACTLY this shape for each item:
@@ -48,8 +41,19 @@ Return: [ { ... }, { ... } ]`;
 
   const results: { id: string, regions: RawRegion[] }[] = [];
 
-  for (const page of pages) {
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
     const base64 = page.base64Image.split(",")[1] || page.base64Image;
+
+    const hintForPage = pageHints?.find(h => h.pageIndex === i);
+    const basePrompt = buildTypesettingPrompt({
+      pageCount: 1,
+      customInstructions,
+      generalGuidance,
+      translateJapanese,
+      translateSfx,
+      pageHints: hintForPage ? [{ pageIndex: 0, hint: hintForPage.hint }] : undefined,
+    });
 
     const response = await fetch(`${endpoint.replace(/\/$/, "")}/api/generate`, {
       method: "POST",

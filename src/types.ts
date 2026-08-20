@@ -53,6 +53,7 @@ export interface ProcessedImage {
   error?: string;
   splitGroupId?: string;
   splitIndex?: number;
+  userTranslationHint?: string;
 }
 
 export type Tool = 'select' | 'draw' | 'erase';
