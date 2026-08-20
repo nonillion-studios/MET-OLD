@@ -3,8 +3,10 @@ import Konva from 'konva';
 import { Upload, Download, Play, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, ZoomIn, ZoomOut, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Sparkles, Undo, Redo, Wand2, Scissors, Settings, Search, X } from 'lucide-react';
 import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingleImage } from './lib/zip';
 import { processMangaPages, RawRegion } from './lib/gemini';
+import { processMangaPagesOllama } from './lib/ollama';
+import { buildTypesettingPrompt } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
-import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool } from './types';
+import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
 import { mapRawRegionToPixels } from './utils/textUtils';
 import { UploadReviewModal } from './components/UploadReviewModal';
 import { PageTextsModal } from './components/PageTextsModal';
@@ -85,9 +87,14 @@ export default function App() {
   // Settings State
   const [customApiKey, setCustomApiKey] = useState('');
   const [customInstructions, setCustomInstructions] = useState('');
+  const [generalTranslationGuidance, setGeneralTranslationGuidance] = useState('');
   const [translateJapanese, setTranslateJapanese] = useState(true);
   const [translateSfx, setTranslateSfx] = useState(true);
   const [zipMatchMode, setZipMatchMode] = useState<'filename' | 'index'>('filename');
+  const [aiProvider, setAiProvider] = useState<AIProvider>('gemini');
+  const [ollamaEndpoint, setOllamaEndpoint] = useState('http://localhost:11434');
+  const [ollamaModel, setOllamaModel] = useState('');
+  const [geminiDisplayName, setGeminiDisplayName] = useState('Gemini 2.5 Flash');
 
   const [autoFitAndCenter, setAutoFitAndCenter] = useState<boolean>(() => {
     return localStorage.getItem('manga_auto_fit_and_center') !== 'false';
@@ -130,7 +137,18 @@ export default function App() {
     if (savedTransSfx !== null) setTranslateSfx(savedTransSfx === 'true');
     const savedMatchMode = localStorage.getItem('manga_zip_match_mode');
     if (savedMatchMode) setZipMatchMode(savedMatchMode as any);
-    
+
+    const savedGeneralGuidance = localStorage.getItem('manga_general_translation_guidance');
+    if (savedGeneralGuidance) setGeneralTranslationGuidance(savedGeneralGuidance);
+    const savedAiProvider = localStorage.getItem('manga_ai_provider');
+    if (savedAiProvider) setAiProvider(savedAiProvider as AIProvider);
+    const savedOllamaEndpoint = localStorage.getItem('manga_ollama_endpoint');
+    if (savedOllamaEndpoint) setOllamaEndpoint(savedOllamaEndpoint);
+    const savedOllamaModel = localStorage.getItem('manga_ollama_model');
+    if (savedOllamaModel) setOllamaModel(savedOllamaModel);
+    const savedGeminiDisplayName = localStorage.getItem('manga_gemini_display_name');
+    if (savedGeminiDisplayName) setGeminiDisplayName(savedGeminiDisplayName);
+
     const savedAutoFit = localStorage.getItem('manga_auto_fit_and_center');
     if (savedAutoFit !== null) setAutoFitAndCenter(savedAutoFit === 'true');
     const savedCompress = localStorage.getItem('manga_compress_before_processing');
@@ -174,7 +192,61 @@ export default function App() {
     setZipMatchMode(val);
     localStorage.setItem('manga_zip_match_mode', val);
   };
-  
+
+  const handleGeneralGuidanceChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setGeneralTranslationGuidance(val);
+    localStorage.setItem('manga_general_translation_guidance', val);
+  };
+
+  const handleSetAiProvider = (val: AIProvider) => {
+    setAiProvider(val);
+    localStorage.setItem('manga_ai_provider', val);
+  };
+
+  const handleOllamaEndpointChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOllamaEndpoint(val);
+    localStorage.setItem('manga_ollama_endpoint', val);
+  };
+
+  const handleOllamaModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOllamaModel(val);
+    localStorage.setItem('manga_ollama_model', val);
+  };
+
+  const handleGeminiDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setGeminiDisplayName(val);
+    localStorage.setItem('manga_gemini_display_name', val);
+  };
+
+  const translateWithProvider = async (
+    pages: { id: string, base64Image: string, mimeType: string }[],
+    geminiKey?: string
+  ): Promise<{ id: string, regions: RawRegion[] }[]> => {
+    if (aiProvider === 'ollama') {
+      return processMangaPagesOllama(
+        pages,
+        ollamaEndpoint,
+        ollamaModel,
+        customInstructions,
+        generalTranslationGuidance,
+        translateJapanese,
+        translateSfx
+      );
+    }
+    return processMangaPages(
+      pages,
+      geminiKey,
+      customInstructions,
+      translateJapanese,
+      translateSfx,
+      generalTranslationGuidance
+    );
+  };
+
   const handleSetAutoFitAndCenter = (val: boolean) => {
     setAutoFitAndCenter(val);
     localStorage.setItem('manga_auto_fit_and_center', String(val));
@@ -1200,12 +1272,9 @@ export default function App() {
             return { id: img.id, base64Image: imgBase64, mimeType };
           }));
 
-          const chunkResults = await processMangaPages(
-            processedPages, 
-            key,
-            customInstructions,
-            translateJapanese,
-            translateSfx
+          const chunkResults = await translateWithProvider(
+            processedPages,
+            key
           );
           
           await Promise.all(chunkResults.map(async result => {
@@ -1294,7 +1363,7 @@ export default function App() {
         }
       }
 
-      const results = await processMangaPages([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key, customInstructions, translateJapanese, translateSfx);
+      const results = await translateWithProvider([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key);
       const rawRegions = results[0]?.regions || [];
       
       const newRegions: Region[] = rawRegions.map(raw => {
@@ -1848,32 +1917,83 @@ export default function App() {
               <div className="flex flex-col gap-6">
                 {/* Config Panel */}
                 <div className="space-y-6">
-                  {/* API Key Box */}
+                  {/* AI Provider Box */}
                   <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
-                    <div className="flex justify-between items-center">
-                      <h3 className="text-base font-semibold text-white font-display">Gemini API Credentials</h3>
-                      {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length > 0 && (
-                        <span className="text-[11px] bg-blue-950/40 border border-blue-800 text-sky-400 px-2.5 py-0.5 rounded-full font-mono">
-                          {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length} Key(s) Loaded
-                        </span>
-                      )}
-                    </div>
-                    <textarea 
-                      value={customApiKey}
-                      onChange={handleApiKeyChange}
-                      placeholder="Add keys (one key per line or comma-separated)..."
-                      className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-mono focus:ring-1 focus:ring-sky-500/20"
-                    />
-                    <div className="space-y-1.5 text-[11px] text-slate-400 leading-relaxed font-mono">
-                      <p>✧ Speed tip: Rotating several keys shares requests seamlessly to avoid rate limits safely.</p>
-                      <p>✧ Runs automatically on standard Gemini flash parameters to ensure prompt translations.</p>
-                    </div>
+                    <h3 className="text-base font-semibold text-white font-display">AI Provider</h3>
+                    <select
+                      value={aiProvider}
+                      onChange={(e) => handleSetAiProvider(e.target.value as AIProvider)}
+                      className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 outline-none"
+                    >
+                      <option value="gemini">Gemini</option>
+                      <option value="ollama">Ollama (local)</option>
+                    </select>
+
+                    {aiProvider === 'gemini' ? (
+                      <div className="space-y-2">
+                        <label className="text-[11px] text-slate-400 font-mono">Display Name (cosmetic only)</label>
+                        <input
+                          type="text"
+                          value={geminiDisplayName}
+                          onChange={handleGeminiDisplayNameChange}
+                          placeholder="Gemini 2.5 Flash"
+                          className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                        />
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Ollama Endpoint URL</label>
+                          <input
+                            type="text"
+                            value={ollamaEndpoint}
+                            onChange={handleOllamaEndpointChange}
+                            placeholder="http://localhost:11434"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Ollama Model Name</label>
+                          <input
+                            type="text"
+                            value={ollamaModel}
+                            onChange={handleOllamaModelChange}
+                            placeholder="e.g. llava, bakllava, qwen2-vl"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
+
+                  {/* API Key Box */}
+                  {aiProvider === 'gemini' && (
+                    <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
+                      <div className="flex justify-between items-center">
+                        <h3 className="text-base font-semibold text-white font-display">Gemini API Credentials</h3>
+                        {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length > 0 && (
+                          <span className="text-[11px] bg-blue-950/40 border border-blue-800 text-sky-400 px-2.5 py-0.5 rounded-full font-mono">
+                            {customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean).length} Key(s) Loaded
+                          </span>
+                        )}
+                      </div>
+                      <textarea
+                        value={customApiKey}
+                        onChange={handleApiKeyChange}
+                        placeholder="Add keys (one key per line or comma-separated)..."
+                        className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-mono focus:ring-1 focus:ring-sky-500/20"
+                      />
+                      <div className="space-y-1.5 text-[11px] text-slate-400 leading-relaxed font-mono">
+                        <p>✧ Speed tip: Rotating several keys shares requests seamlessly to avoid rate limits safely.</p>
+                        <p>✧ Runs automatically on standard Gemini flash parameters to ensure prompt translations.</p>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Instructions Box */}
                   <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
                     <h3 className="text-base font-semibold text-white font-display">Custom Agent Prompting</h3>
-                    <textarea 
+                    <textarea
                       value={customInstructions}
                       onChange={handleCustomInstructionsChange}
                       placeholder="E.g., Translate to Egyptian dialect, keep humor puns, keep sound effects minimal, etc."
@@ -1881,6 +2001,20 @@ export default function App() {
                     />
                     <p className="text-[11px] text-slate-400 font-mono">
                       ✧ Custom instructions are passed directly to the Gemini neural vision matrix during page synthesis.
+                    </p>
+                  </div>
+
+                  {/* General Translation Guidance Box */}
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
+                    <h3 className="text-base font-semibold text-white font-display">General Translation Guidance</h3>
+                    <textarea
+                      value={generalTranslationGuidance}
+                      onChange={handleGeneralGuidanceChange}
+                      placeholder="E.g., Always keep honorifics, avoid slang, prefer formal Arabic, etc."
+                      className="w-full h-28 bg-black/60 border border-sky-500/15 rounded-xl p-3 text-sm outline-none focus:border-sky-500 text-slate-200 resize-none font-sans focus:ring-1 focus:ring-sky-500/20"
+                    />
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      ✧ Unlike per-project Custom Agent Prompting, this guidance is always included in every request regardless of the selected AI provider.
                     </p>
                   </div>
                 </div>
@@ -3550,37 +3684,25 @@ export default function App() {
                 <div className="relative">
                   <textarea
                     readOnly
-                    value={`You are a professional manga & manhwa typesetting and translation assistant. We need you to segment the speech bubbles of the attached page image and translate them into natural, high-quality, typeset Arabic.
-Please locate speech balloons and output exactly in this JSON format ONLY (No other conversation or thoughts):
-[
-  {
-    "xmin": 150,
-    "ymin": 250,
-    "xmax": 320,
-    "ymax": 380,
-    "type": "bubble",
-    "originalText": "Original English balloon text",
-    "translatedText": "the alternate translated text, centered"
-  }
-]`}
+                    value={buildTypesettingPrompt({
+                      pageCount: 1,
+                      customInstructions,
+                      generalGuidance: generalTranslationGuidance,
+                      translateJapanese,
+                      translateSfx,
+                    })}
                     className="w-full h-28 bg-black/60 border border-[#444] rounded-xl p-3 text-xs text-slate-350 font-mono resize-none text-left"
                     dir="ltr"
                   />
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(`You are a professional manga & manhwa typesetting and translation assistant. We need you to segment the speech bubbles of the attached page image and translate them into natural, high-quality, typeset Arabic.
-Please locate speech balloons and output exactly in this JSON format ONLY (No other conversation or thoughts):
-[
-  {
-    "xmin": 150,
-    "ymin": 250,
-    "xmax": 320,
-    "ymax": 380,
-    "type": "bubble",
-    "originalText": "Original English balloon text",
-    "translatedText": "the alternate translated text, centered"
-  }
-]`);
+                      navigator.clipboard.writeText(buildTypesettingPrompt({
+                        pageCount: 1,
+                        customInstructions,
+                        generalGuidance: generalTranslationGuidance,
+                        translateJapanese,
+                        translateSfx,
+                      }));
                       Swal.fire({
                         icon: 'success',
                         title: 'Cocktail prompt copied!',

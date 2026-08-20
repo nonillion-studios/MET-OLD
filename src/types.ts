@@ -1,3 +1,5 @@
+export type AIProvider = 'gemini' | 'ollama';
+
 export interface Region {
   id: string;
   type: "bubble" | "sfx";
