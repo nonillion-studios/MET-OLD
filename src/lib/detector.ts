@@ -169,7 +169,7 @@ export function resolveBubblePolygon(
     const height = maxY - minY;
     // Inset the safe-text bounds by ~12.5% on each axis so text doesn't touch the
     // bubble edge, mirroring the margin behavior of floodFillBubbleDetailed.
-    const insetRatio = 0.125;
+    const insetRatio = 0.08;
     const insetX = width * insetRatio;
     const insetY = height * insetRatio;
 

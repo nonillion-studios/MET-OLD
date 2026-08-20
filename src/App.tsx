@@ -142,6 +142,7 @@ export default function App() {
   const [showTranslationDocsModal, setShowTranslationDocsModal] = useState(false);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [showLeftPanel, setShowLeftPanel] = useState(true);
+  const [showTopbar, setShowTopbar] = useState(true);
   const [librarySearchQuery, setLibrarySearchQuery] = useState('');
   const filteredMangas = librarySearchQuery.trim()
     ? mangas.filter(m => m.title.toLowerCase().includes(librarySearchQuery.trim().toLowerCase()))
@@ -940,6 +941,9 @@ export default function App() {
             const word = words[w];
             for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
               if (extendableArabicLetters.test(word[charIdx])) {
+                // Never insert a tatweel between ل (lam) and a following alef-family
+                // letter (ا/أ/إ/آ) — لا/لأ/لإ/لآ are mandatory ligatures in Arabic.
+                if (word[charIdx] === 'ل' && /[اأإآ]/.test(word[charIdx + 1])) continue;
                 words[w] = word.slice(0, charIdx + 1) + 'ـــ' + word.slice(charIdx + 1);
                 insertCounts[w]++;
                 insertedThisPass = true;
@@ -1455,7 +1459,7 @@ export default function App() {
     const rawDetections = detectorType === 'gradio'
       ? await detectPageViaGradio(srcBase64, detectorEndpoint)
       : await detectPage(srcBase64, detectorEndpoint);
-    const detections = rawDetections.filter(d => d.class_name === 'bubble' || d.class_name === 'text');
+    const detections = rawDetections.filter(d => d.class_name === 'bubble' || d.class_name === 'text' || d.class_name === 'sfx');
 
     updateImage(img.id, { detectorResult: detections });
 
@@ -1536,9 +1540,11 @@ export default function App() {
         if (!slot || !slot.geometry) return null;
         const { detection, geometry } = slot;
         const bounds = geometry.safeTextBounds;
+        const isSfx = detection.class_name === 'sfx';
+        const regionType: Region['type'] = isSfx ? 'sfx' : 'bubble';
         const region: Region = {
           id: Math.random().toString(36).substr(2, 9),
-          type: detection.class_name === 'bubble' ? 'bubble' : 'sfx',
+          type: regionType,
           originalText: result.originalText,
           translatedText: result.translatedText,
           x: bounds.x,
@@ -1549,9 +1555,9 @@ export default function App() {
           textColor: '#000000',
           strokeColor: 'transparent',
           strokeWidth: 0,
-          bgColor: img.originalDataUrl ? 'transparent' : (detection.class_name === 'bubble' ? '#ffffff' : 'transparent'),
-          fontFamily: detection.class_name === 'bubble' ? 'Marhey' : 'Aref Ruqaa',
-          fontSize: Math.max(16, Math.floor(bounds.height / 4)),
+          bgColor: img.originalDataUrl ? 'transparent' : (regionType === 'bubble' ? '#ffffff' : 'transparent'),
+          fontFamily: isSfx ? (result.fontFamily || 'Aref Ruqaa') : 'Marhey',
+          fontSize: Math.max(18, Math.floor(bounds.height / 3)),
           fontWeight: 'normal',
           fontStyle: 'normal',
           textAlign: 'center',
@@ -2069,6 +2075,15 @@ export default function App() {
       )}
       {/* Topbar */}
       {activeNavigationTab === 'library' && activeChapterId !== null && (
+        <button
+          onClick={() => setShowTopbar(v => !v)}
+          className="fixed top-2 right-1/2 translate-x-1/2 z-50 flex items-center justify-center w-8 h-8 rounded-full bg-black/60 hover:bg-black/80 border border-sky-500/30 text-sky-300 hover:text-white backdrop-blur-md transition-all shadow-lg"
+          title={showTopbar ? 'Hide Topbar' : 'Show Topbar'}
+        >
+          {showTopbar ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+      )}
+      {activeNavigationTab === 'library' && activeChapterId !== null && showTopbar && (
         <header className="min-h-16 border-b border-sky-500/10 flex flex-wrap items-center justify-between px-3 sm:px-6 py-2 bg-black/40 backdrop-blur-md shrink-0 gap-3">
           <div className="flex items-center gap-3 sm:gap-6 shrink-0">
             <button

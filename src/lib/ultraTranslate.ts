@@ -9,6 +9,9 @@ export interface UltraRegionResult {
   region: number;
   originalText: string;
   translatedText: string;
+  // Optional stylistic font suggestion from the AI, applicable only to sfx-type
+  // numbered regions (bubble/text regions always use Marhey regardless).
+  fontFamily?: string;
 }
 
 interface UltraTranslateOptions {
@@ -42,7 +45,7 @@ export async function translateUltraModePage(opts: UltraTranslateOptions): Promi
 
     const schemaInstructions = `
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape:
-[ { "region": number, "originalText": string, "translatedText": string } ]`;
+[ { "region": number, "originalText": string, "translatedText": string, "fontFamily": string (optional, sfx regions only) } ]`;
 
     const response = await fetch(`${opts.ollamaEndpoint.replace(/\/$/, "")}/api/generate`, {
       method: "POST",
@@ -104,6 +107,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
                   region: { type: Type.INTEGER },
                   originalText: { type: Type.STRING },
                   translatedText: { type: Type.STRING },
+                  fontFamily: { type: Type.STRING },
                 },
                 required: ["region", "originalText", "translatedText"],
               },
