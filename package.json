@@ -16,6 +16,7 @@
   "build": {
     "appId": "com.nonillionstudios.mangaaistudio",
     "productName": "MangaAI Studio",
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },
