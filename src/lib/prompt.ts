@@ -10,6 +10,10 @@ export interface BuildTypesettingPromptOptions {
   translateJapanese?: boolean;
   translateSfx?: boolean;
   pageHints?: PageHint[];
+  // Ultra Mode: when true, the page already has numbered region markers drawn on it
+  // (from a YOLO detector pass) so the AI should NOT be asked for geometry at all —
+  // just per-numbered-region text extraction/translation.
+  coordinatesProvided?: boolean;
 }
 
 export function buildTypesettingPrompt({
@@ -19,7 +23,25 @@ export function buildTypesettingPrompt({
   translateJapanese,
   translateSfx,
   pageHints,
+  coordinatesProvided,
 }: BuildTypesettingPromptOptions): string {
+  if (coordinatesProvided) {
+    let ultraPrompt = `You are an expert manga translator. I am providing ${pageCount} manga page(s).
+Each page already has numbered region markers (small numbered boxes) drawn directly on the image, one per speech bubble/text/SFX region that has already been detected. Do NOT detect regions yourself and do NOT return any coordinates or bounding boxes — the geometry is already known.
+
+For EACH numbered marker visible on the page:
+1. Identify the original text inside/near that numbered region.
+2. ${translateJapanese ? "Translate it accurately and naturally to Arabic. Prioritize smooth, colloquial or literary flow depending on context." : "Extract the text and keep the 'translatedText' field as the original text (do NOT translate)."}
+${!translateSfx ? "3. IGNORE any numbered region that is purely a sound effect (SFX) with no dialogue — do not include it in the output.\n" : ""}
+${generalGuidance ? `Additional Instructions from User:\n${generalGuidance}\n` : ""}${customInstructions ? `Additional Instructions from User:\n${customInstructions}\n` : ""}
+${pageHints && pageHints.length > 0 ? `Reference translations provided by the user for specific pages (page index → text), use these as the ground-truth translation for that page instead of generating your own:\n${pageHints.map(h => `[page ${h.pageIndex}]: ${h.hint}`).join('\n')}\n` : ""}
+Return ONLY a JSON array of objects, one for each page, in the EXACT order they were provided.
+Schema: [ { "pageIndex": 0, "regions": [ { "region": 1, "originalText": "...", "translatedText": "..." } ] } ]
+The "region" field MUST match the number printed on the marker in the image. Do not invent numbers that aren't present on the page, and do not include geometry/coordinates of any kind.`;
+
+    return ultraPrompt;
+  }
+
   let textPrompt = `You are an expert manga translator and professional typesetter.
 I am providing ${pageCount} manga page(s). Analyze EACH page independently.
 For each page, detect all speech bubbles, narrative text, and sound effects (SFX).

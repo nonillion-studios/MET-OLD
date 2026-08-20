@@ -1,3 +1,5 @@
+import { DetectorDetection } from './lib/detector';
+
 export type AIProvider = 'gemini' | 'ollama';
 
 export interface Region {
@@ -54,6 +56,7 @@ export interface ProcessedImage {
   splitGroupId?: string;
   splitIndex?: number;
   userTranslationHint?: string;
+  detectorResult?: DetectorDetection[];
 }
 
 export type Tool = 'select' | 'draw' | 'erase';

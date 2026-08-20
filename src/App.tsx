@@ -6,6 +6,8 @@ import { processMangaPages, RawRegion } from './lib/gemini';
 import { processMangaPagesOllama } from './lib/ollama';
 import { buildTypesettingPrompt, PageHint } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
+import { detectPage, resolveBubblePolygon, DetectorDetection } from './lib/detector';
+import { translateUltraModePage, UltraRegionResult } from './lib/ultraTranslate';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
 import { mapRawRegionToPixels } from './utils/textUtils';
 import { UploadReviewModal } from './components/UploadReviewModal';
@@ -17,6 +19,16 @@ import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
+
+// Shared skip-empty-bubble rule: a region whose original text is only punctuation
+// (periods, question/exclamation marks, ellipses, Arabic question mark) with no actual
+// letters/digits carries no translatable content, so it should be dropped entirely
+// rather than becoming a Region on the page.
+const isEmptyBubbleText = (text: string | undefined | null): boolean => {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return true;
+  return /^[.?!؟…\s]+$/.test(trimmed);
+};
 
 const ImageEditor = React.lazy(() => import('./components/ImageEditor').then(m => ({ default: m.ImageEditor })));
 
@@ -99,6 +111,10 @@ export default function App() {
   const [ollamaEndpoint, setOllamaEndpoint] = useState('http://localhost:11434');
   const [ollamaModel, setOllamaModel] = useState('');
   const [geminiDisplayName, setGeminiDisplayName] = useState('Gemini 2.5 Flash');
+  const [ultraModeEnabled, setUltraModeEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('manga_ultra_mode_enabled') === 'true';
+  });
+  const [detectorEndpoint, setDetectorEndpoint] = useState('http://localhost:5000');
 
   const [autoFitAndCenter, setAutoFitAndCenter] = useState<boolean>(() => {
     return localStorage.getItem('manga_auto_fit_and_center') !== 'false';
@@ -157,6 +173,8 @@ export default function App() {
     if (savedOllamaModel) setOllamaModel(savedOllamaModel);
     const savedGeminiDisplayName = localStorage.getItem('manga_gemini_display_name');
     if (savedGeminiDisplayName) setGeminiDisplayName(savedGeminiDisplayName);
+    const savedDetectorEndpoint = localStorage.getItem('manga_detector_endpoint');
+    if (savedDetectorEndpoint) setDetectorEndpoint(savedDetectorEndpoint);
 
     const savedAutoFit = localStorage.getItem('manga_auto_fit_and_center');
     if (savedAutoFit !== null) setAutoFitAndCenter(savedAutoFit === 'true');
@@ -231,6 +249,17 @@ export default function App() {
     const val = e.target.value;
     setGeminiDisplayName(val);
     localStorage.setItem('manga_gemini_display_name', val);
+  };
+
+  const handleSetUltraModeEnabled = (val: boolean) => {
+    setUltraModeEnabled(val);
+    localStorage.setItem('manga_ultra_mode_enabled', String(val));
+  };
+
+  const handleDetectorEndpointChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setDetectorEndpoint(val);
+    localStorage.setItem('manga_detector_endpoint', val);
   };
 
   const translateWithProvider = async (
@@ -1409,6 +1438,133 @@ export default function App() {
     return existingHint ? `${existingHint}\n${splitNote}` : splitNote;
   };
 
+  // Ultra Mode: uses the standalone YOLO detector server to locate bubble/text regions
+  // on the ORIGINAL (non-inpainted) page first, draws numbered markers on a copy of the
+  // page, and asks the AI only for per-number text/translation (no geometry guessing).
+  const processImageUltraMode = async (img: ProcessedImage, geminiKey: string) => {
+    const srcBase64 = img.originalDataUrl || img.dataUrl;
+
+    const detections = (await detectPage(srcBase64, detectorEndpoint))
+      .filter(d => d.class_name === 'bubble' || d.class_name === 'text');
+
+    updateImage(img.id, { detectorResult: detections });
+
+    if (detections.length === 0) {
+      updateImage(img.id, { status: 'done', regions: [] });
+      return;
+    }
+
+    // Load the page into an offscreen canvas to get pixel data (for flood-fill fallback)
+    // and to draw the numbered markers, following the same canvas pattern used elsewhere
+    // in this file (e.g. handleSmartBubbleFill).
+    const imageObj = new Image();
+    imageObj.src = srcBase64;
+    await new Promise(resolve => { imageObj.onload = resolve; });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = imageObj.width;
+    canvas.height = imageObj.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error("Ultra Mode: could not create canvas context");
+    ctx.drawImage(imageObj, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    interface UltraSlot {
+      detection: DetectorDetection;
+      geometry: ReturnType<typeof resolveBubblePolygon>;
+    }
+    const slots: UltraSlot[] = detections.map(detection => ({
+      detection,
+      geometry: resolveBubblePolygon(detection, imageData),
+    }));
+
+    // Draw numbered markers (1-indexed) near each resolved region (or bbox center as
+    // fallback when geometry resolution failed) onto the annotated copy sent to the AI.
+    slots.forEach((slot, idx) => {
+      const num = idx + 1;
+      const cx = slot.geometry ? slot.geometry.x + slot.geometry.width / 2 : (slot.detection.bbox.x1 + slot.detection.bbox.x2) / 2;
+      const cy = slot.geometry ? slot.geometry.y : slot.detection.bbox.y1;
+      const boxSize = Math.max(24, Math.min(48, canvas.width * 0.02));
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(255, 40, 40, 0.9)';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.fillRect(cx - boxSize / 2, cy - boxSize / 2, boxSize, boxSize);
+      ctx.strokeRect(cx - boxSize / 2, cy - boxSize / 2, boxSize, boxSize);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${Math.round(boxSize * 0.6)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(num), cx, cy);
+      ctx.restore();
+    });
+
+    const annotatedDataUrl = canvas.toDataURL(img.mimeType.startsWith('image/png') ? 'image/png' : 'image/jpeg', 0.9);
+
+    const singleHintText = buildSplitContextHint(img, imagesRef.current);
+
+    const aiResults: UltraRegionResult[] = await translateUltraModePage({
+      provider: aiProvider,
+      base64Image: annotatedDataUrl,
+      mimeType: img.mimeType.startsWith('image/png') ? 'image/png' : 'image/jpeg',
+      customApiKey: geminiKey,
+      ollamaEndpoint,
+      ollamaModel,
+      customInstructions,
+      generalGuidance: [generalTranslationGuidance, singleHintText].filter(Boolean).join('\n') || undefined,
+      translateJapanese,
+      translateSfx,
+    });
+
+    // Post-filter: drop any returned region whose original text is empty/punctuation-only.
+    const filteredResults = aiResults.filter(r => !isEmptyBubbleText(r.originalText));
+
+    const newRegions: Region[] = filteredResults
+      .map(result => {
+        const slot = slots[result.region - 1];
+        if (!slot || !slot.geometry) return null;
+        const { detection, geometry } = slot;
+        const bounds = geometry.safeTextBounds;
+        const region: Region = {
+          id: Math.random().toString(36).substr(2, 9),
+          type: detection.class_name === 'bubble' ? 'bubble' : 'sfx',
+          originalText: result.originalText,
+          translatedText: result.translatedText,
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+          angle: 0,
+          textColor: '#000000',
+          strokeColor: 'transparent',
+          strokeWidth: 0,
+          bgColor: img.originalDataUrl ? 'transparent' : (detection.class_name === 'bubble' ? '#ffffff' : 'transparent'),
+          fontFamily: detection.class_name === 'bubble' ? 'Marhey' : 'Aref Ruqaa',
+          fontSize: Math.max(16, Math.floor(bounds.height / 4)),
+          fontWeight: 'normal',
+          fontStyle: 'normal',
+          textAlign: 'center',
+          lineHeight: 1.2,
+          letterSpacing: 0,
+          opacity: 1,
+          shadowBlur: 0,
+          shadowColor: 'transparent',
+          autoFitText: true,
+          bubbleContour: geometry.contour,
+        };
+        return region;
+      })
+      .filter((r): r is Region => r !== null);
+
+    let finalRegions = newRegions;
+    if (autoEnhanceAfterProcess) {
+      finalRegions = await autoEnhanceRegionsForImage(srcBase64, finalRegions);
+    }
+
+    updateImage(img.id, { status: 'done', regions: finalRegions });
+  };
+
   const processImage = async (img: ProcessedImage) => {
     if (img.status === 'processing') return;
     updateImage(img.id, { status: 'processing', error: undefined });
@@ -1434,9 +1590,14 @@ export default function App() {
       const singlePageHints: PageHint[] | undefined = singleHintText && singleHintText.trim().length > 0
         ? [{ pageIndex: 0, hint: singleHintText }]
         : undefined;
+      if (ultraModeEnabled) {
+        await processImageUltraMode(img, key);
+        return;
+      }
+
       const results = await translateWithProvider([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key, singlePageHints);
-      const rawRegions = results[0]?.regions || [];
-      
+      const rawRegions = (results[0]?.regions || []).filter(raw => !isEmptyBubbleText(raw.originalText));
+
       const newRegions: Region[] = rawRegions.map(raw => {
         // Map 0-1000 to pixel coordinates
         const { x, y, width, height } = mapRawRegionToPixels(raw, img.width, img.height);
@@ -3493,6 +3654,34 @@ export default function App() {
                             className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
                           />
                         </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Ultra Mode Box */}
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-base font-semibold text-white font-display">Ultra Mode</h3>
+                        <p className="text-[11px] text-slate-400 mt-1 font-mono">Uses a dedicated YOLO detector server to locate bubbles/text before translation, instead of relying on the AI for geometry.</p>
+                      </div>
+                      <button
+                        onClick={() => handleSetUltraModeEnabled(!ultraModeEnabled)}
+                        className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${ultraModeEnabled ? 'bg-sky-500' : 'bg-white/10'}`}
+                      >
+                        <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${ultraModeEnabled ? 'translate-x-5' : ''}`} />
+                      </button>
+                    </div>
+                    {ultraModeEnabled && (
+                      <div className="space-y-2">
+                        <label className="text-[11px] text-slate-400 font-mono">Detector Endpoint URL</label>
+                        <input
+                          type="text"
+                          value={detectorEndpoint}
+                          onChange={handleDetectorEndpointChange}
+                          placeholder="http://localhost:5000"
+                          className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                        />
                       </div>
                     )}
                   </div>
