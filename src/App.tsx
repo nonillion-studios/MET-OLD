@@ -14,6 +14,7 @@ import { UploadReviewModal } from './components/UploadReviewModal';
 import { PageTextsModal } from './components/PageTextsModal';
 import { ProcessPagesModal } from './components/ProcessPagesModal';
 import { TranslationDocsModal } from './components/TranslationDocsModal';
+import { UltraDetectionPreviewModal } from './components/UltraDetectionPreviewModal';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -118,6 +119,21 @@ export default function App() {
   const [detectorType, setDetectorType] = useState<'api' | 'gradio'>(() => {
     return (localStorage.getItem('manga_detector_type') as 'api' | 'gradio') || 'api';
   });
+  const [ultraModeConfidence, setUltraModeConfidence] = useState<number>(() => {
+    const stored = parseFloat(localStorage.getItem('manga_ultra_mode_confidence') || '');
+    return Number.isFinite(stored) ? stored : 0.25;
+  });
+  const [ultraModeAutoAccept, setUltraModeAutoAccept] = useState<boolean>(() => {
+    return localStorage.getItem('manga_ultra_mode_auto_accept') === 'true';
+  });
+  // Ultra Mode detection preview gate: when set, the preview modal is shown; resolving it
+  // (via Continue/Cancel) settles the promise processImageUltraMode is awaiting.
+  const [ultraPreview, setUltraPreview] = useState<{
+    img: ProcessedImage;
+    phase1: { detections: DetectorDetection[]; slots: any[]; annotatedDataUrl: string; confidence: number };
+    onRedetect: (confidence: number) => Promise<{ detections: DetectorDetection[]; slots: any[]; annotatedDataUrl: string; confidence: number }>;
+    resolve: (outcome: { accepted: boolean; phase1: { detections: DetectorDetection[]; slots: any[]; annotatedDataUrl: string; confidence: number } }) => void;
+  } | null>(null);
 
   const [autoFitAndCenter, setAutoFitAndCenter] = useState<boolean>(() => {
     return localStorage.getItem('manga_auto_fit_and_center') !== 'false';
@@ -140,6 +156,7 @@ export default function App() {
   const [showManagePages, setShowManagePages] = useState(false);
   const [showPageTextsModal, setShowPageTextsModal] = useState(false);
   const [showTranslationDocsModal, setShowTranslationDocsModal] = useState(false);
+  const [processingStatusLog, setProcessingStatusLog] = useState<string | null>(null);
   const [showRightPanel, setShowRightPanel] = useState(false);
   const [showLeftPanel, setShowLeftPanel] = useState(true);
   const [showTopbar, setShowTopbar] = useState(true);
@@ -269,6 +286,16 @@ export default function App() {
   const handleSetDetectorType = (val: 'api' | 'gradio') => {
     setDetectorType(val);
     localStorage.setItem('manga_detector_type', val);
+  };
+
+  const handleSetUltraModeConfidence = (val: number) => {
+    setUltraModeConfidence(val);
+    localStorage.setItem('manga_ultra_mode_confidence', String(val));
+  };
+
+  const handleSetUltraModeAutoAccept = (val: boolean) => {
+    setUltraModeAutoAccept(val);
+    localStorage.setItem('manga_ultra_mode_auto_accept', String(val));
   };
 
   const translateWithProvider = async (
@@ -1450,22 +1477,36 @@ export default function App() {
     return existingHint ? `${existingHint}\n${splitNote}` : splitNote;
   };
 
-  // Ultra Mode: uses the standalone YOLO detector server to locate bubble/text regions
-  // on the ORIGINAL (non-inpainted) page first, draws numbered markers on a copy of the
-  // page, and asks the AI only for per-number text/translation (no geometry guessing).
-  const processImageUltraMode = async (img: ProcessedImage, geminiKey: string) => {
+  interface UltraSlot {
+    detection: DetectorDetection;
+    geometry: ReturnType<typeof resolveBubblePolygon>;
+  }
+
+  interface UltraPhase1Result {
+    detections: DetectorDetection[];
+    slots: UltraSlot[];
+    annotatedDataUrl: string;
+    confidence: number;
+  }
+
+  // Phase 1 of Ultra Mode: runs the YOLO detector, resolves bubble geometry for each
+  // detection, and draws the numbered-marker annotated image sent to the AI. Split out
+  // from the AI/translation phase so a detection preview can be shown (and re-run with a
+  // different confidence) before committing to the AI call.
+  const runUltraDetectionPhase = async (img: ProcessedImage, confidence: number): Promise<UltraPhase1Result> => {
     const srcBase64 = img.originalDataUrl || img.dataUrl;
 
+    setProcessingStatusLog('Detecting regions (YOLO)...');
     const rawDetections = detectorType === 'gradio'
-      ? await detectPageViaGradio(srcBase64, detectorEndpoint)
-      : await detectPage(srcBase64, detectorEndpoint);
+      ? await detectPageViaGradio(srcBase64, detectorEndpoint, confidence)
+      : await detectPage(srcBase64, detectorEndpoint, confidence);
     const detections = rawDetections.filter(d => d.class_name === 'bubble' || d.class_name === 'text' || d.class_name === 'sfx');
 
     updateImage(img.id, { detectorResult: detections });
+    setProcessingStatusLog(`Detection complete (${detections.length} regions)`);
 
     if (detections.length === 0) {
-      updateImage(img.id, { status: 'done', regions: [] });
-      return;
+      return { detections, slots: [], annotatedDataUrl: '', confidence };
     }
 
     // Load the page into an offscreen canvas to get pixel data (for flood-fill fallback)
@@ -1483,10 +1524,6 @@ export default function App() {
     ctx.drawImage(imageObj, 0, 0);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-    interface UltraSlot {
-      detection: DetectorDetection;
-      geometry: ReturnType<typeof resolveBubblePolygon>;
-    }
     const slots: UltraSlot[] = detections.map(detection => ({
       detection,
       geometry: resolveBubblePolygon(detection, imageData),
@@ -1516,8 +1553,18 @@ export default function App() {
 
     const annotatedDataUrl = canvas.toDataURL(img.mimeType.startsWith('image/png') ? 'image/png' : 'image/jpeg', 0.9);
 
+    return { detections, slots, annotatedDataUrl, confidence };
+  };
+
+  // Phase 2 of Ultra Mode: the AI call over the annotated (numbered-marker) image, plus
+  // building Region objects from the results and committing them via updateImage.
+  const runUltraTranslatePhase = async (img: ProcessedImage, geminiKey: string, phase1: UltraPhase1Result) => {
+    const srcBase64 = img.originalDataUrl || img.dataUrl;
+    const { slots, annotatedDataUrl } = phase1;
+
     const singleHintText = buildSplitContextHint(img, imagesRef.current);
 
+    setProcessingStatusLog(aiProvider === 'ollama' ? 'Translating (Ollama)...' : 'Translating (Gemini)...');
     const aiResults: UltraRegionResult[] = await translateUltraModePage({
       provider: aiProvider,
       base64Image: annotatedDataUrl,
@@ -1534,7 +1581,10 @@ export default function App() {
     // Post-filter: drop any returned region whose original text is empty/punctuation-only.
     const filteredResults = aiResults.filter(r => !isEmptyBubbleText(r.originalText));
 
-    const newRegions: Region[] = filteredResults
+    const numberedResults = filteredResults.filter((r): r is UltraRegionResult & { region: number } => !r.extra);
+    const extraResults = filteredResults.filter((r): r is UltraRegionResult & { extra: true } => !!r.extra);
+
+    const newRegions: Region[] = numberedResults
       .map(result => {
         const slot = slots[result.region - 1];
         if (!slot || !slot.geometry) return null;
@@ -1573,15 +1623,89 @@ export default function App() {
       })
       .filter((r): r is Region => r !== null);
 
-    let finalRegions = newRegions;
+    // "extra" entries: text the detector missed entirely, reported by the AI with its own
+    // 0-1000-scale geometry. Map through the same shared pixel-mapping helper the normal
+    // (non-Ultra) pipeline uses, then build a Region the same way AI-returned regions are
+    // built there - no bubbleContour since there's no detector geometry for these.
+    const extraRegions: Region[] = extraResults.map(result => {
+      const { x, y, width, height } = mapRawRegionToPixels(result, img.width, img.height);
+      const regionType: Region['type'] = 'bubble';
+      const region: Region = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: regionType,
+        originalText: result.originalText,
+        translatedText: result.translatedText,
+        x,
+        y,
+        width,
+        height,
+        angle: result.angle || 0,
+        textColor: result.textColor || '#000000',
+        strokeColor: result.strokeColor || 'transparent',
+        strokeWidth: result.strokeWidth ?? 0,
+        bgColor: img.originalDataUrl ? 'transparent' : '#ffffff',
+        fontFamily: result.fontFamily || 'Marhey',
+        fontSize: result.fontSize || Math.max(18, Math.floor(height / 3)),
+        fontWeight: result.fontWeight || 'normal',
+        fontStyle: result.fontStyle || 'normal',
+        textAlign: (result.textAlign as Region['textAlign']) || 'center',
+        lineHeight: result.lineHeight || 1.2,
+        letterSpacing: 0,
+        opacity: 1,
+        shadowBlur: 0,
+        shadowColor: 'transparent',
+        autoFitText: true,
+      };
+      return region;
+    });
+
+    let finalRegions = [...newRegions, ...extraRegions];
     if (autoEnhanceAfterProcess) {
       finalRegions = await autoEnhanceRegionsForImage(srcBase64, finalRegions);
     }
 
+    setProcessingStatusLog(null);
     updateImage(img.id, { status: 'done', regions: finalRegions });
   };
 
-  const processImage = async (img: ProcessedImage) => {
+  // Ultra Mode entry point: runs Phase 1 (detection) then either proceeds straight to
+  // Phase 2 (AI translation) or, if auto-accept is off, pauses for the user to review the
+  // detection preview modal first. `forceAutoAccept` is set by the sequential processing
+  // queue (see processPagesSequentially) - pausing for a manual review modal on every page
+  // of a multi-page queue would defeat the point of "watch it advance automatically", so
+  // the queue always proceeds straight through regardless of the auto-accept setting.
+  const processImageUltraMode = async (img: ProcessedImage, geminiKey: string, opts?: { forceAutoAccept?: boolean }) => {
+    const phase1 = await runUltraDetectionPhase(img, ultraModeConfidence);
+
+    if (phase1.detections.length === 0) {
+      setProcessingStatusLog(null);
+      updateImage(img.id, { status: 'done', regions: [] });
+      return;
+    }
+
+    let finalPhase1 = phase1;
+    if (!ultraModeAutoAccept && !opts?.forceAutoAccept) {
+      const outcome = await new Promise<{ accepted: boolean; phase1: UltraPhase1Result }>(resolve => {
+        setUltraPreview({
+          img,
+          phase1,
+          onRedetect: (confidence: number) => runUltraDetectionPhase(img, confidence),
+          resolve,
+        });
+      });
+      setUltraPreview(null);
+      if (!outcome.accepted) {
+        setProcessingStatusLog(null);
+        updateImage(img.id, { status: 'idle' });
+        return;
+      }
+      finalPhase1 = outcome.phase1;
+    }
+
+    await runUltraTranslatePhase(img, geminiKey, finalPhase1);
+  };
+
+  const processImage = async (img: ProcessedImage, ultraOpts?: { forceAutoAccept?: boolean }) => {
     if (img.status === 'processing') return;
     updateImage(img.id, { status: 'processing', error: undefined });
     
@@ -1607,10 +1731,11 @@ export default function App() {
         ? [{ pageIndex: 0, hint: singleHintText }]
         : undefined;
       if (ultraModeEnabled) {
-        await processImageUltraMode(img, key);
+        await processImageUltraMode(img, key, ultraOpts);
         return;
       }
 
+      setProcessingStatusLog(aiProvider === 'ollama' ? 'Translating (Ollama)...' : 'Translating (Gemini)...');
       const results = await translateWithProvider([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key, singlePageHints);
       const rawRegions = (results[0]?.regions || []).filter(raw => !isEmptyBubbleText(raw.originalText));
 
@@ -1654,8 +1779,10 @@ export default function App() {
         finalRegions = await autoEnhanceRegionsForImage(srcBase64, finalRegions);
       }
 
+      setProcessingStatusLog(null);
       updateImage(img.id, { status: 'done', regions: finalRegions });
     } catch (error: any) {
+      setProcessingStatusLog(null);
       updateImage(img.id, { status: 'error', error: error.message });
     }
   };
@@ -1673,7 +1800,10 @@ export default function App() {
       const img = imagesRef.current.find(x => x.id === id);
       if (!img) continue;
       try {
-        await processImage(img);
+        // Force auto-accept for Ultra Mode during queued/sequential processing: pausing
+        // for a manual detection-preview review on every page would defeat the point of
+        // watching a multi-page queue advance automatically. See processImageUltraMode.
+        await processImage(img, { forceAutoAccept: true });
 
         if (!autoEnhanceAfterProcess) {
           const processedImg = imagesRef.current.find(x => x.id === id);
@@ -2986,6 +3116,7 @@ export default function App() {
                   previewRegions={bubbleFillPreview && bubbleFillPreview.imgId === selectedImage.id
                     ? bubbleFillPreview.regions.filter(r => r.type === 'bubble')
                     : undefined}
+                  processingStatusLog={selectedImage.status === 'processing' ? processingStatusLog : null}
                 />
               </Suspense>
             </div>
@@ -3727,6 +3858,33 @@ export default function App() {
                               : 'A plain HTTP endpoint implementing the /api/detect contract.'}
                           </p>
                         </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono flex justify-between">
+                            <span>Detection Confidence</span>
+                            <span className="text-sky-400">{ultraModeConfidence.toFixed(2)}</span>
+                          </label>
+                          <input
+                            type="range"
+                            min={0.05}
+                            max={0.95}
+                            step={0.05}
+                            value={ultraModeConfidence}
+                            onChange={(e) => handleSetUltraModeConfidence(parseFloat(e.target.value))}
+                            className="w-full accent-sky-500"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between pt-1">
+                          <div>
+                            <p className="text-[11px] text-slate-300 font-mono">Auto-accept detections</p>
+                            <p className="text-[10px] text-slate-500 font-mono mt-0.5">Skip the detection preview and go straight to AI translation.</p>
+                          </div>
+                          <button
+                            onClick={() => handleSetUltraModeAutoAccept(!ultraModeAutoAccept)}
+                            className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${ultraModeAutoAccept ? 'bg-sky-500' : 'bg-white/10'}`}
+                          >
+                            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${ultraModeAutoAccept ? 'translate-x-5' : ''}`} />
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -3890,6 +4048,25 @@ export default function App() {
           moveImageDown={moveImageDown}
           deleteImage={deleteImage}
           onClose={() => setShowManagePages(false)}
+        />
+      )}
+
+      {ultraPreview && (
+        <UltraDetectionPreviewModal
+          annotatedImage={ultraPreview.phase1.annotatedDataUrl}
+          detectionCount={ultraPreview.phase1.detections.length}
+          initialConfidence={ultraPreview.phase1.confidence}
+          onRedetect={async (confidence) => {
+            const result = await ultraPreview.onRedetect(confidence);
+            setUltraPreview(prev => (prev ? { ...prev, phase1: result } : prev));
+            return { annotatedImage: result.annotatedDataUrl, detectionCount: result.detections.length };
+          }}
+          onContinue={() => {
+            ultraPreview.resolve({ accepted: true, phase1: ultraPreview.phase1 });
+          }}
+          onCancel={() => {
+            ultraPreview.resolve({ accepted: false, phase1: ultraPreview.phase1 });
+          }}
         />
       )}
 

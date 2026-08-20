@@ -5,14 +5,40 @@ import { AIProvider } from "../types";
 // Ultra Mode's simplified per-region translation result: no geometry, just the
 // numbered marker index (matching the number drawn on the annotated image) plus
 // original/translated text.
-export interface UltraRegionResult {
+export interface UltraNumberedRegionResult {
   region: number;
   originalText: string;
   translatedText: string;
   // Optional stylistic font suggestion from the AI, applicable only to sfx-type
   // numbered regions (bubble/text regions always use Marhey regardless).
   fontFamily?: string;
+  extra?: false;
 }
+
+// AI-detected text NOT covered by any numbered marker (detector miss) - carries its
+// own geometry (0-1000 scale, same convention as normal/coordinatesProvided=false mode)
+// plus the full set of typesetting fields RawRegion normally provides.
+export interface UltraExtraRegionResult {
+  extra: true;
+  originalText: string;
+  translatedText: string;
+  ymin: number;
+  xmin: number;
+  ymax: number;
+  xmax: number;
+  angle: number;
+  textColor: string;
+  strokeColor: string;
+  strokeWidth: number;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: string;
+  fontStyle: string;
+  textAlign: string;
+  lineHeight: number;
+}
+
+export type UltraRegionResult = UltraNumberedRegionResult | UltraExtraRegionResult;
 
 interface UltraTranslateOptions {
   provider: AIProvider;
@@ -44,8 +70,11 @@ export async function translateUltraModePage(opts: UltraTranslateOptions): Promi
     if (!opts.ollamaModel) throw new Error("Ollama model name is required");
 
     const schemaInstructions = `
-IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape:
-[ { "region": number, "originalText": string, "translatedText": string, "fontFamily": string (optional, sfx regions only) } ]`;
+IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry:
+[
+  { "region": number, "originalText": string, "translatedText": string, "fontFamily": string (optional, sfx regions only) },
+  { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
+]`;
 
     const response = await fetch(`${opts.ollamaEndpoint.replace(/\/$/, "")}/api/generate`, {
       method: "POST",
@@ -104,12 +133,30 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
               items: {
                 type: Type.OBJECT,
                 properties: {
+                  // Numbered-marker entries (primary path)
                   region: { type: Type.INTEGER },
                   originalText: { type: Type.STRING },
                   translatedText: { type: Type.STRING },
                   fontFamily: { type: Type.STRING },
+                  // "extra" (detector-missed) entries: geometry + typesetting fields.
+                  // All optional here since Gemini's structured schema doesn't support
+                  // true unions - they're simply absent/null on numbered entries.
+                  extra: { type: Type.BOOLEAN },
+                  ymin: { type: Type.NUMBER },
+                  xmin: { type: Type.NUMBER },
+                  ymax: { type: Type.NUMBER },
+                  xmax: { type: Type.NUMBER },
+                  angle: { type: Type.NUMBER },
+                  textColor: { type: Type.STRING },
+                  strokeColor: { type: Type.STRING },
+                  strokeWidth: { type: Type.NUMBER },
+                  fontSize: { type: Type.NUMBER },
+                  fontWeight: { type: Type.STRING },
+                  fontStyle: { type: Type.STRING },
+                  textAlign: { type: Type.STRING },
+                  lineHeight: { type: Type.NUMBER },
                 },
-                required: ["region", "originalText", "translatedText"],
+                required: ["originalText", "translatedText"],
               },
             },
           },

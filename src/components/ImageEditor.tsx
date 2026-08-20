@@ -19,6 +19,7 @@ interface ImageEditorProps {
   showOriginal?: boolean;
   onAddStroke: (stroke: PaintStroke) => void;
   previewRegions?: Region[];
+  processingStatusLog?: string | null;
 }
 
 const AutoFitText = ({ region, pageHeight }: { region: Region; pageHeight: number }) => {
@@ -126,6 +127,7 @@ export function ImageEditor({
   showOriginal,
   onAddStroke,
   previewRegions,
+  processingStatusLog,
 }: ImageEditorProps) {
   const bgToUse = showOriginal && image.originalDataUrl ? image.originalDataUrl : image.dataUrl;
   const [img] = useImage(bgToUse);
@@ -136,6 +138,23 @@ export function ImageEditor({
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<PaintStroke | null>(null);
+
+  // Text measurement (calculateAutoFitFontSize / measureWrappedTextHeight) relies on
+  // canvas font metrics, which can still be using fallback-font metrics if a custom
+  // Arabic web font is still loading when a region is first rendered - this would
+  // under-measure the required box height and cause real clipping once the font swaps
+  // in. Force one re-render once all fonts are ready so AutoFitText's memoized
+  // measurements recompute against final metrics.
+  const [, setFontsReadyTick] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    if (document.fonts && document.fonts.status !== 'loaded') {
+      document.fonts.ready.then(() => {
+        if (!cancelled) setFontsReadyTick(t => t + 1);
+      });
+    }
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (containerRef.current) {
@@ -260,6 +279,9 @@ export function ImageEditor({
             <div className="absolute inset-0 z-20 backdrop-blur-md bg-sky-950/20 flex flex-col items-center justify-center gap-2 rounded-lg pointer-events-none">
               <Loader2 className="animate-spin text-sky-300" size={32} />
               <span className="text-sky-100 text-sm font-medium">Processing...</span>
+              {processingStatusLog && (
+                <span className="text-sky-300/80 text-xs">{processingStatusLog}</span>
+              )}
             </div>
           )}
           <Stage
