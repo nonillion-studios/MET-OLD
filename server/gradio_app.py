@@ -44,6 +44,10 @@ def detect(image: np.ndarray, confidence: float):
     detections = []
     annotated = img_bgr.copy()
     boxes = result.boxes
+    # `result.masks` is only populated when the loaded weights are a YOLOv11-seg
+    # (segmentation) model - same as api_server.py's run_detection(). Detection-only
+    # weights leave this as None and only bbox is returned in that case.
+    masks = getattr(result, "masks", None)
     if boxes is not None:
         for i in range(len(boxes)):
             cls_id = int(boxes.cls[i].item())
@@ -51,11 +55,22 @@ def detect(image: np.ndarray, confidence: float):
             x1, y1, x2, y2 = [float(v) for v in boxes.xyxy[i].tolist()]
             class_name = names.get(cls_id, str(cls_id)) if isinstance(names, dict) else names[cls_id]
 
-            detections.append({
+            detection = {
                 "class_name": class_name,
                 "confidence": conf,
                 "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-            })
+            }
+
+            if masks is not None:
+                try:
+                    # xy is a list of (N, 2) arrays of polygon points in original image coords
+                    poly = masks.xy[i]
+                    detection["polygon"] = [{"x": float(p[0]), "y": float(p[1])} for p in poly]
+                    cv2.polylines(annotated, [poly.astype(np.int32)], True, (0, 0, 255), 2)
+                except (IndexError, AttributeError):
+                    pass
+
+            detections.append(detection)
 
             cv2.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
             cv2.putText(annotated, f"{class_name} {conf:.2f}", (int(x1), max(0, int(y1) - 5)),

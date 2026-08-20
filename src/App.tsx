@@ -6,7 +6,7 @@ import { processMangaPages, RawRegion } from './lib/gemini';
 import { processMangaPagesOllama } from './lib/ollama';
 import { buildTypesettingPrompt, PageHint } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
-import { detectPage, resolveBubblePolygon, DetectorDetection } from './lib/detector';
+import { detectPage, detectPageViaGradio, resolveBubblePolygon, DetectorDetection } from './lib/detector';
 import { translateUltraModePage, UltraRegionResult } from './lib/ultraTranslate';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
 import { mapRawRegionToPixels } from './utils/textUtils';
@@ -115,6 +115,9 @@ export default function App() {
     return localStorage.getItem('manga_ultra_mode_enabled') === 'true';
   });
   const [detectorEndpoint, setDetectorEndpoint] = useState('http://localhost:5000');
+  const [detectorType, setDetectorType] = useState<'api' | 'gradio'>(() => {
+    return (localStorage.getItem('manga_detector_type') as 'api' | 'gradio') || 'api';
+  });
 
   const [autoFitAndCenter, setAutoFitAndCenter] = useState<boolean>(() => {
     return localStorage.getItem('manga_auto_fit_and_center') !== 'false';
@@ -260,6 +263,11 @@ export default function App() {
     const val = e.target.value;
     setDetectorEndpoint(val);
     localStorage.setItem('manga_detector_endpoint', val);
+  };
+
+  const handleSetDetectorType = (val: 'api' | 'gradio') => {
+    setDetectorType(val);
+    localStorage.setItem('manga_detector_type', val);
   };
 
   const translateWithProvider = async (
@@ -1444,8 +1452,10 @@ export default function App() {
   const processImageUltraMode = async (img: ProcessedImage, geminiKey: string) => {
     const srcBase64 = img.originalDataUrl || img.dataUrl;
 
-    const detections = (await detectPage(srcBase64, detectorEndpoint))
-      .filter(d => d.class_name === 'bubble' || d.class_name === 'text');
+    const rawDetections = detectorType === 'gradio'
+      ? await detectPageViaGradio(srcBase64, detectorEndpoint)
+      : await detectPage(srcBase64, detectorEndpoint);
+    const detections = rawDetections.filter(d => d.class_name === 'bubble' || d.class_name === 'text');
 
     updateImage(img.id, { detectorResult: detections });
 
@@ -3673,15 +3683,35 @@ export default function App() {
                       </button>
                     </div>
                     {ultraModeEnabled && (
-                      <div className="space-y-2">
-                        <label className="text-[11px] text-slate-400 font-mono">Detector Endpoint URL</label>
-                        <input
-                          type="text"
-                          value={detectorEndpoint}
-                          onChange={handleDetectorEndpointChange}
-                          placeholder="http://localhost:5000"
-                          className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
-                        />
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Detector Type</label>
+                          <select
+                            value={detectorType}
+                            onChange={(e) => handleSetDetectorType(e.target.value as 'api' | 'gradio')}
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          >
+                            <option value="api">Custom API Server (server/api_server.py)</option>
+                            <option value="gradio">Gradio Space (server/gradio_app.py)</option>
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">
+                            {detectorType === 'gradio' ? 'Gradio Space (username/space-name or full URL)' : 'Detector Endpoint URL'}
+                          </label>
+                          <input
+                            type="text"
+                            value={detectorEndpoint}
+                            onChange={handleDetectorEndpointChange}
+                            placeholder={detectorType === 'gradio' ? 'e.g. yourname/manga-ai-detector' : 'http://localhost:5000'}
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                          <p className="text-[10px] text-slate-500 font-mono leading-relaxed">
+                            {detectorType === 'gradio'
+                              ? 'Uses the Gradio client protocol (queue-based), not a plain HTTP call - point this at your HF Space id or self-hosted Gradio URL.'
+                              : 'A plain HTTP endpoint implementing the /api/detect contract.'}
+                          </p>
+                        </div>
                       </div>
                     )}
                   </div>

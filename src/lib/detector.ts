@@ -1,3 +1,4 @@
+import { Client } from '@gradio/client';
 import { floodFillBubbleDetailed } from './bubbleDetect';
 
 // Client for the separate YOLOv11 "Manga-AI-detector" Flask server
@@ -88,6 +89,49 @@ export async function detectPage(
   }
 
   return json.detections;
+}
+
+// Calls a Hugging Face Space (or any self-hosted Gradio app) running server/gradio_app.py,
+// via Gradio's own client protocol - NOT a plain fetch/multipart POST like detectPage(),
+// since Gradio apps use a queue-based session protocol (Client.connect handles that).
+// `spaceIdOrUrl` accepts either a HF Space id ("username/space-name") or a full URL to a
+// self-hosted Gradio app. gradio_app.py's gr.Interface has inputs [image, confidence] and
+// outputs [annotated_image, detections_json] in that order - result.data mirrors that order.
+export async function detectPageViaGradio(
+  imageDataUrl: string,
+  spaceIdOrUrl: string,
+  confidence: number = 0.25
+): Promise<DetectorDetection[]> {
+  let blob: Blob;
+  try {
+    blob = await dataUrlToBlob(imageDataUrl);
+  } catch (e: any) {
+    throw new Error(`Ultra Mode: failed to prepare image for detection: ${e?.message || e}`);
+  }
+
+  let client;
+  try {
+    client = await Client.connect(spaceIdOrUrl);
+  } catch (e: any) {
+    throw new Error(`Ultra Mode: could not connect to Gradio Space "${spaceIdOrUrl}" (${e?.message || e})`);
+  }
+
+  let result;
+  try {
+    result = await client.predict('/predict', { image: blob, confidence });
+  } catch (e: any) {
+    throw new Error(`Ultra Mode: Gradio Space call failed (${e?.message || e})`);
+  }
+
+  const data = result?.data as any[] | undefined;
+  const detectionsPayload = Array.isArray(data) ? data[1] : undefined;
+  const detections = detectionsPayload?.detections;
+
+  if (!Array.isArray(detections)) {
+    throw new Error('Ultra Mode: Gradio Space response missing a valid "detections" array (expected gradio_app.py\'s output shape)');
+  }
+
+  return detections as DetectorDetection[];
 }
 
 export interface ResolvedBubbleGeometry {
