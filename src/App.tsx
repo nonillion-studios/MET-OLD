@@ -10,6 +10,7 @@ import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool
 import { mapRawRegionToPixels } from './utils/textUtils';
 import { UploadReviewModal } from './components/UploadReviewModal';
 import { PageTextsModal } from './components/PageTextsModal';
+import { ProcessPagesModal } from './components/ProcessPagesModal';
 import { TranslationDocsModal } from './components/TranslationDocsModal';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
@@ -21,13 +22,15 @@ const ImageEditor = React.lazy(() => import('./components/ImageEditor').then(m =
 
 export default function App() {
   const [images, setImages] = useState<ProcessedImage[]>([]);
+  const imagesRef = useRef<ProcessedImage[]>([]);
+  useEffect(() => { imagesRef.current = images; }, [images]);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
   const [bubbleFillPreview, setBubbleFillPreview] = useState<{ imgId: string, regions: Region[] } | null>(null);
   const [isGeneratingBubbleFillPreview, setIsGeneratingBubbleFillPreview] = useState(false);
-  const [isProcessingAll, setIsProcessingAll] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
-  const [selectedForProcess, setSelectedForProcess] = useState<Set<string>>(new Set());
+  const [showProcessPagesModal, setShowProcessPagesModal] = useState(false);
+  const [processingQueueProgress, setProcessingQueueProgress] = useState<{ current: number, total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Manga Hierarchical Library state
@@ -1387,23 +1390,6 @@ export default function App() {
     }
   };
 
-  const toggleSelectForProcess = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const newSet = new Set(selectedForProcess);
-    const keysList = customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean);
-    const maxSelect = 5 * Math.max(1, keysList.length);
-    if (newSet.has(id)) {
-      newSet.delete(id);
-    } else {
-      if (newSet.size >= maxSelect) {
-        alert(`You can select up to ${maxSelect} images based on your API key list (5 per key).`);
-        return;
-      }
-      newSet.add(id);
-    }
-    setSelectedForProcess(newSet);
-  };
-
   // Builds a hint string for split-page cohesion: notes to the model that this image is
   // part N of M of a longer vertical strip that was split, so bubbles near the top/bottom
   // edge may continue from/into an adjacent part. Merges with any existing Translation Docs
@@ -1423,122 +1409,6 @@ export default function App() {
     return existingHint ? `${existingHint}\n${splitNote}` : splitNote;
   };
 
-  const runParallelMangaTranslation = async (batch: ProcessedImage[]) => {
-    const keysList = customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean);
-    const keysToUse = keysList.length > 0 ? keysList : [''];
-    
-    // Chunk batch into groups of 5
-    const chunks: ProcessedImage[][] = [];
-    for (let i = 0; i < batch.length; i += 5) {
-      chunks.push(batch.slice(i, i + 5));
-    }
-    
-    const maxConcurrent = keysToUse.length;
-    
-    // Process matching the number of keys concurrently
-    for (let i = 0; i < chunks.length; i += maxConcurrent) {
-      const currentChunks = chunks.slice(i, i + maxConcurrent);
-      
-      await Promise.all(currentChunks.map(async (chunk, index) => {
-        const key = keysToUse[index % keysToUse.length];
-        
-        // Mark all in chunk as processing
-        chunk.forEach(img => updateImage(img.id, { status: 'processing', error: undefined }));
-        
-        try {
-          const processedPages = await Promise.all(chunk.map(async img => {
-            const srcBase64 = img.originalDataUrl || img.dataUrl;
-            let imgBase64 = srcBase64;
-            let mimeType = img.mimeType;
-            if (compressBeforeProcessing) {
-              try {
-                imgBase64 = await compressImageBase64(srcBase64, 1600, 0.82);
-                mimeType = 'image/jpeg';
-              } catch (e) {
-                console.error("Compression failed for img:", img.id, e);
-              }
-            }
-            return { id: img.id, base64Image: imgBase64, mimeType };
-          }));
-
-          const chunkPageHints: PageHint[] = chunk
-            .map((img, idx) => ({ pageIndex: idx, hint: buildSplitContextHint(img, images) || '' }))
-            .filter(h => h.hint.trim().length > 0);
-
-          const chunkResults = await translateWithProvider(
-            processedPages,
-            key,
-            chunkPageHints.length > 0 ? chunkPageHints : undefined
-          );
-          
-          await Promise.all(chunkResults.map(async result => {
-            const img = chunk.find(b => b.id === result.id);
-            if (!img) return;
-            
-            const newRegions: Region[] = result.regions.map(raw => {
-              const { x, y, width, height } = mapRawRegionToPixels(raw, img.width, img.height);
-
-              return {
-                id: Math.random().toString(36).substr(2, 9),
-                type: raw.type,
-                originalText: raw.originalText,
-                translatedText: raw.translatedText,
-                x, y, width, height,
-                angle: raw.angle || 0,
-                textColor: raw.textColor || '#000000',
-                strokeColor: raw.strokeColor || 'transparent',
-                strokeWidth: raw.strokeWidth ?? 0,
-                bgColor: img.originalDataUrl ? 'transparent' : (raw.bgColor && raw.bgColor !== 'transparent' ? raw.bgColor : (raw.type === 'bubble' ? '#ffffff' : 'transparent')),
-                fontFamily: raw.fontFamily || (raw.type === 'bubble' ? 'Marhey' : 'Aref Ruqaa'),
-                fontSize: raw.fontSize || Math.max(16, Math.floor(height / 4)),
-                fontWeight: raw.fontWeight || 'normal',
-                fontStyle: raw.fontStyle || 'normal',
-                textAlign: raw.textAlign || 'center',
-                lineHeight: raw.lineHeight || 1.2,
-                letterSpacing: 0,
-                opacity: 1,
-                shadowBlur: 0,
-                shadowColor: 'transparent',
-                autoFitText: true
-              };
-            });
-            
-            let finalRegions = newRegions;
-            if (autoFitAndCenter) {
-              finalRegions = await traceRegionsWithBubbleDetection(img.originalDataUrl || img.dataUrl, newRegions);
-            }
-            if (autoEnhanceAfterProcess) {
-              finalRegions = await autoEnhanceRegionsForImage(img.originalDataUrl || img.dataUrl, finalRegions);
-            }
-
-            updateImage(img.id, { status: 'done', regions: finalRegions });
-          }));
-        } catch (err: any) {
-          chunk.forEach(img => updateImage(img.id, { status: 'error', error: err.message }));
-        }
-      }));
-    }
-  };
-
-  const processSelectedImages = async () => {
-    if (selectedForProcess.size === 0) return;
-    const batch = images.filter(img => selectedForProcess.has(img.id) && img.status !== 'done');
-    if (batch.length === 0) {
-       setSelectedForProcess(new Set());
-       return;
-    }
-    
-    await runParallelMangaTranslation(batch);
-    setSelectedForProcess(new Set());
-  };
-
-  const processAllImages = async () => {
-    setIsProcessingAll(true);
-    const uncompleted = images.filter(img => img.status !== 'done');
-    await runParallelMangaTranslation(uncompleted);
-    setIsProcessingAll(false);
-  };
-  
   const processImage = async (img: ProcessedImage) => {
     if (img.status === 'processing') return;
     updateImage(img.id, { status: 'processing', error: undefined });
@@ -1611,6 +1481,41 @@ export default function App() {
     } catch (error: any) {
       updateImage(img.id, { status: 'error', error: error.message });
     }
+  };
+
+  // Sequentially processes a queue of page ids, one at a time (no concurrency), reusing
+  // processImage for the actual translation call. After each page finishes, this ensures
+  // bubble-centering has run for it unconditionally: if autoEnhanceAfterProcess is off
+  // (processImage wouldn't have centered it), we apply computeBubbleFillForRegions here;
+  // if it's on, processImage already centered it, so we skip re-applying to avoid doing it twice.
+  const processPagesSequentially = async (imageIds: string[]) => {
+    setProcessingQueueProgress({ current: 0, total: imageIds.length });
+    for (let i = 0; i < imageIds.length; i++) {
+      const id = imageIds[i];
+      setProcessingQueueProgress({ current: i + 1, total: imageIds.length });
+      const img = imagesRef.current.find(x => x.id === id);
+      if (!img) continue;
+      try {
+        await processImage(img);
+
+        if (!autoEnhanceAfterProcess) {
+          const processedImg = imagesRef.current.find(x => x.id === id);
+          if (processedImg && processedImg.status === 'done') {
+            const srcBase64 = processedImg.originalDataUrl || processedImg.dataUrl;
+            const { newRegions, changed } = await computeBubbleFillForRegions(srcBase64, processedImg.regions);
+            if (changed) {
+              updateImage(id, { regions: newRegions });
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error('Sequential processing failed for image', id, err);
+      }
+
+      setSelectedImageId(id);
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
+    setProcessingQueueProgress(null);
   };
 
   // Helper handlers for library hierarchy
@@ -2059,12 +1964,14 @@ export default function App() {
           </div>
 
           <button
-            onClick={processAllImages}
-            disabled={images.length === 0 || isProcessingAll}
+            onClick={() => setShowProcessPagesModal(true)}
+            disabled={images.length === 0 || processingQueueProgress !== null}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-3 sm:px-4 py-2 rounded-md font-medium text-sm transition-colors"
           >
-            {isProcessingAll ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-            <span className="hidden sm:inline">Process All</span>
+            {processingQueueProgress ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+            <span className="hidden sm:inline">
+              {processingQueueProgress ? `Processing ${processingQueueProgress.current} of ${processingQueueProgress.total}...` : 'Process Pages'}
+            </span>
           </button>
 
           <button
@@ -2660,8 +2567,8 @@ export default function App() {
                 )}
                 <img src={img.dataUrl} alt={img.filename} loading="lazy" className={`${img.originalDataUrl ? 'w-1/2' : 'w-full'} h-full object-cover opacity-80`} />
                 {img.status === 'processing' && (
-                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                    <Loader2 className="animate-spin text-sky-400" />
+                  <div className="absolute inset-0 backdrop-blur-md bg-sky-950/30 flex items-center justify-center rounded animate-pulse">
+                    <Loader2 className="animate-spin text-sky-300" size={20} />
                   </div>
                 )}
                 {img.status === 'done' && (
@@ -2669,19 +2576,7 @@ export default function App() {
                     <span className="bg-emerald-500 text-white text-[10px] uppercase font-bold px-1.5 py-0.5 rounded">Done</span>
                   </div>
                 )}
-                
-                {img.status !== 'done' && (
-                  <div className="absolute top-2 right-2" onClick={(e) => e.stopPropagation()}>
-                    <input 
-                      type="checkbox"
-                      checked={selectedForProcess.has(img.id)}
-                      onChange={(e) => toggleSelectForProcess(img.id, e as any)}
-                      className="w-4 h-4 rounded border-[#444] bg-[#111] text-blue-600 focus:ring-blue-500"
-                      title="Select for batch processing (Max 5)"
-                    />
-                  </div>
-                )}
-                
+
                 {/* Overlays for ordering and deletion */}
                 <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                    <button 
@@ -2871,18 +2766,13 @@ export default function App() {
                           <Wand2 size={14} /> Center All Bubbles
                         </button>
                       )}
-                      {(selectedForProcess.size > 0 || selectedImage.status !== 'done') && (
+                      {selectedImage.status !== 'done' && (
                         <button
-                          onClick={() => {
-                            if (selectedForProcess.size > 0) {
-                              processSelectedImages();
-                            } else {
-                              processImage(selectedImage);
-                            }
-                          }}
-                          className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded text-xs font-medium transition-colors"
+                          onClick={() => processImage(selectedImage)}
+                          disabled={processingQueueProgress !== null}
+                          className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-3 py-1.5 rounded text-xs font-medium transition-colors"
                         >
-                          <Play size={14} /> {selectedForProcess.size > 0 ? `Process Selected (${selectedForProcess.size})` : 'Process Image'}
+                          <Play size={14} /> Process Page
                         </button>
                       )}
                     </div>
@@ -3781,6 +3671,17 @@ export default function App() {
         />
       )}
 
+      {showProcessPagesModal && (
+        <ProcessPagesModal
+          images={images}
+          onClose={() => setShowProcessPagesModal(false)}
+          onStart={(imageIds) => {
+            setShowProcessPagesModal(false);
+            processPagesSequentially(imageIds);
+          }}
+        />
+      )}
+
       {showTranslationDocsModal && (
         <TranslationDocsModal
           images={images}
@@ -3790,6 +3691,17 @@ export default function App() {
               updateImage(p.imageId, { userTranslationHint: p.hint });
             });
             setShowTranslationDocsModal(false);
+          }}
+        />
+      )}
+
+      {showProcessPagesModal && (
+        <ProcessPagesModal
+          images={images}
+          onClose={() => setShowProcessPagesModal(false)}
+          onStart={(imageIds) => {
+            setShowProcessPagesModal(false);
+            processPagesSequentially(imageIds);
           }}
         />
       )}

@@ -4,6 +4,7 @@ import { Stage, Layer, Image as KonvaImage, Rect, Text, Group, Transformer, Line
 import useImage from 'use-image';
 import { ProcessedImage, Region, PaintStroke, Tool } from '../types';
 import { calculateAutoFitFontSize, measureWrappedTextHeight, wrapRtlLines } from '../utils/textUtils';
+import { Loader2 } from 'lucide-react';
 
 interface ImageEditorProps {
   image: ProcessedImage;
@@ -255,6 +256,12 @@ export function ImageEditor({
             margin: '0 auto'
           }}
         >
+          {image.status === 'processing' && (
+            <div className="absolute inset-0 z-20 backdrop-blur-md bg-sky-950/20 flex flex-col items-center justify-center gap-2 rounded-lg pointer-events-none">
+              <Loader2 className="animate-spin text-sky-300" size={32} />
+              <span className="text-sky-100 text-sm font-medium">Processing...</span>
+            </div>
+          )}
           <Stage
             width={stageWidth}
             height={stageHeight}
