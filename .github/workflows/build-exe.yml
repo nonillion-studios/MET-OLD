@@ -22,6 +22,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Remove optional native ws accelerators (no VS toolchain on this runner)
+        # bufferutil/utf-8-validate are optional perf addons for 'ws' (pulled in
+        # transitively via @google/genai), not needed by this app - ws works fine
+        # without them. electron-builder's npmRebuild:false doesn't stop it from
+        # trying to rebuild them via node-gyp, which fails without Visual Studio,
+        # so just remove them before packaging. Removing the whole .npmrc/optional
+        # deps globally instead broke other builds (e.g. Rollup's platform-specific
+        # native binary), so this is done surgically, here only.
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force node_modules\bufferutil -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force node_modules\utf-8-validate -ErrorAction SilentlyContinue
+
       - name: Typecheck
         run: npm run lint
 
