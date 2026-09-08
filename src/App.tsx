@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, Suspense } from 'react
 import Konva from 'konva';
 import { Upload, Download, Play, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, ZoomIn, ZoomOut, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Sparkles, Undo, Redo, Wand2, Scissors, Settings, Search, X, FileText } from 'lucide-react';
 import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingleImage } from './lib/zip';
+import { buildPagePsd } from './lib/psdExport';
 import { processMangaPages, RawRegion } from './lib/gemini';
 import { processMangaPagesOllama } from './lib/ollama';
 import { buildTypesettingPrompt, PageHint } from './lib/prompt';
@@ -1015,7 +1016,7 @@ export default function App() {
 
     Swal.fire({
       title: 'Generating Photoshop PSD files...',
-      text: 'Packing layers, transparent texts, and repainted art into a PSD-compatible workspace...',
+      text: 'Rendering the background art and one editable text layer per bubble for each page...',
       allowOutsideClick: false,
       didOpen: () => {
         Swal.showLoading();
@@ -1026,65 +1027,20 @@ export default function App() {
 
     try {
       const zip = new JSZip();
-      
+
       for (let i = 0; i < images.length; i++) {
         const img = images[i];
-        const pageFolder = zip.folder(`Page_${i + 1}`);
-        if (!pageFolder) continue;
-
-        const bgResponse = await fetch(img.originalDataUrl || img.dataUrl);
-        const bgBlob = await bgResponse.blob();
-        pageFolder.file('Background_Clean.png', bgBlob);
-
-        const textLayerInfo = img.regions.map(r => ({
-          text: r.translatedText,
-          original: r.originalText,
-          x: Math.round(r.x),
-          y: Math.round(r.y),
-          width: Math.round(r.width),
-          height: Math.round(r.height),
-          font: r.fontFamily,
-          size: Math.round(r.fontSize),
-          color: r.textColor,
-          align: r.textAlign
-        }));
-
-        pageFolder.file('PSD_Text_Layers.json', JSON.stringify(textLayerInfo, null, 2));
-
-        const textCanvas = document.createElement('canvas');
-        textCanvas.width = img.width;
-        textCanvas.height = img.height;
-        const textCtx = textCanvas.getContext('2d');
-        if (textCtx) {
-          textCtx.clearRect(0, 0, img.width, img.height);
-          
-          img.regions.forEach(r => {
-            textCtx.fillStyle = r.textColor;
-            textCtx.font = `${r.fontWeight || 'normal'} ${r.fontSize}px "${r.fontFamily}"`;
-            textCtx.textAlign = r.textAlign as any;
-            
-            const lines = (r.translatedText || '').split('\n');
-            const startX = r.textAlign === 'center' ? r.x + r.width / 2 : r.x + 10;
-            const startY = r.y + r.fontSize;
-            lines.forEach((line, lIdx) => {
-              textCtx.fillText(line, startX, startY + (lIdx * r.fontSize * 1.3));
-            });
-          });
-
-          const transparentTextBase64Blob = await new Promise<Blob>((res) => {
-            textCanvas.toBlob((b) => res(b!), 'image/png');
-          });
-          pageFolder.file('Text_Overlay_Layer.png', transparentTextBase64Blob);
-        }
+        const buffer = await buildPagePsd(img);
+        zip.file(`Page_${String(i + 1).padStart(3, '0')}.psd`, buffer);
       }
 
       const content = await zip.generateAsync({ type: 'blob' });
-      saveAs(content, `${mangas.find(m => m.id === activeMangaId)?.title || 'MET'}_Photoshop_MultiLayer_PSD.zip`);
+      saveAs(content, `${mangas.find(m => m.id === activeMangaId)?.title || 'MET'}_PSD.zip`);
 
       Swal.fire({
         icon: 'success',
-        title: 'PSD layer package exported successfully!',
-        text: 'You have received a ZIP file containing fully separated layers, independent transparent text layers, and high-resolution artwork ready to continue in Photoshop.',
+        title: 'PSD files exported successfully!',
+        text: 'Each page is a real, layered .psd (Background + one text layer per bubble) that opens directly in Photoshop.',
         confirmButtonText: 'Excellent',
         confirmButtonColor: '#2563eb',
         background: '#090615',
@@ -1661,7 +1617,9 @@ export default function App() {
 
     let finalRegions = [...newRegions, ...extraRegions];
     if (autoEnhanceAfterProcess) {
-      finalRegions = await autoEnhanceRegionsForImage(srcBase64, finalRegions);
+      // Use the whitened/inpainted dataUrl (not the original source-language image) so the
+      // source text doesn't block the flood fill the same way the manual bubble-fill does.
+      finalRegions = await autoEnhanceRegionsForImage(img.dataUrl, finalRegions);
     }
 
     setProcessingStatusLog(null);
@@ -1773,10 +1731,12 @@ export default function App() {
 
       let finalRegions = newRegions;
       if (autoFitAndCenter) {
-        finalRegions = await traceRegionsWithBubbleDetection(srcBase64, newRegions);
+        // Use the whitened/inpainted dataUrl (not the original source-language image) so the
+        // source text doesn't block the flood fill the same way the manual bubble-fill does.
+        finalRegions = await traceRegionsWithBubbleDetection(img.dataUrl, newRegions);
       }
       if (autoEnhanceAfterProcess) {
-        finalRegions = await autoEnhanceRegionsForImage(srcBase64, finalRegions);
+        finalRegions = await autoEnhanceRegionsForImage(img.dataUrl, finalRegions);
       }
 
       setProcessingStatusLog(null);
@@ -1808,8 +1768,9 @@ export default function App() {
         if (!autoEnhanceAfterProcess) {
           const processedImg = imagesRef.current.find(x => x.id === id);
           if (processedImg && processedImg.status === 'done') {
-            const srcBase64 = processedImg.originalDataUrl || processedImg.dataUrl;
-            const { newRegions, changed } = await computeBubbleFillForRegions(srcBase64, processedImg.regions);
+            // Use the whitened/inpainted dataUrl, not the original source-language image,
+            // so leftover source text doesn't block the flood fill.
+            const { newRegions, changed } = await computeBubbleFillForRegions(processedImg.dataUrl, processedImg.regions);
             if (changed) {
               updateImage(id, { regions: newRegions });
             }
@@ -2925,22 +2886,22 @@ export default function App() {
         </aside>
 
         {/* Editor Area */}
-        <main className="flex-1 min-w-0 p-2 sm:p-4 md:p-6 flex flex-col items-center justify-center relative overflow-hidden">
+        <main className="flex-1 min-w-0 p-2 sm:p-4 md:p-6 flex flex-col items-center justify-center relative overflow-y-auto overflow-x-hidden">
           {selectedImage ? (
             <div className="w-full h-full flex flex-col gap-4">
               <div className="flex justify-between items-center shrink-0">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <h2 className="font-medium text-slate-300 text-sm max-w-[200px] truncate">{selectedImage.filename}</h2>
+                <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                  <h2 className="font-medium text-slate-300 text-sm max-w-[140px] sm:max-w-[200px] truncate">{selectedImage.filename}</h2>
                   <button
                     onClick={() => setShowExternalAIModal(true)}
                     className="flex items-center gap-1.5 bg-[#090615] hover:bg-[#130d2a] border border-sky-500/30 text-sky-200 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all shadow-[0_4px_12px_rgba(56, 189, 248,0.15)]"
                     title="Load and submit translation via external AI assistant"
                   >
-                    <Sparkles size={13} className="text-sky-300 animate-bounce" /> External AI Cocktail ✦
+                    <Sparkles size={13} className="text-sky-300 animate-bounce" /> <span className="hidden sm:inline">External AI Cocktail ✦</span>
                   </button>
-                  
+
                   {/* Tool selection */}
-                  <div className="flex bg-black rounded-lg p-1 border border-[#333] ml-4">
+                  <div className="flex bg-black rounded-lg p-1 border border-[#333] sm:ml-4">
                     <button 
                       onClick={() => setActiveTool('select')}
                       className={`p-1.5 rounded-md ${activeTool === 'select' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
@@ -2995,15 +2956,15 @@ export default function App() {
                   </div>
 
                   {selectedImage.status !== 'processing' && (
-                    <div className="flex items-center gap-2 ml-4 animate-fade-in">
+                    <div className="flex items-center gap-2 sm:ml-4 flex-wrap animate-fade-in">
                       <button
                         onClick={handleDownloadCurrentPage}
-                        className="flex items-center gap-1.5 bg-[#111] hover:bg-[#222] px-3 py-1.5 rounded text-xs font-medium transition-colors"
+                        className="flex items-center gap-1.5 bg-[#111] hover:bg-[#222] px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors"
                         title="Download this page as PNG"
                       >
-                        <Download size={14} /> Download Page
+                        <Download size={14} /> <span className="hidden md:inline">Download Page</span>
                       </button>
-                      <button 
+                      <button
                         onClick={() => {
                           if (confirm("Are you sure you want to remove all texts and paint strokes from this page?")) {
                             saveHistory(selectedImage.id);
@@ -3011,12 +2972,12 @@ export default function App() {
                             setSelectedRegionId(null);
                           }
                         }}
-                        className="flex items-center gap-1.5 bg-red-900/50 hover:bg-red-800 px-3 py-1.5 rounded text-xs font-medium transition-colors text-red-200"
+                        className="flex items-center gap-1.5 bg-red-900/50 hover:bg-red-800 px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors text-red-200"
                         title="Clear all generated texts and paint strokes"
                       >
-                        <Trash2 size={14} /> Clear All
+                        <Trash2 size={14} /> <span className="hidden md:inline">Clear All</span>
                       </button>
-                      <button 
+                      <button
                         onClick={() => {
                           saveHistory(selectedImage.id);
                           const newRegion: Region = {
@@ -3048,26 +3009,26 @@ export default function App() {
                           updateImage(selectedImage.id, { regions: [...selectedImage.regions, newRegion] });
                           setSelectedRegionId(newRegion.id);
                         }}
-                        className="flex items-center gap-1.5 bg-[#111] hover:bg-[#222] px-3 py-1.5 rounded text-xs font-medium transition-colors"
+                        className="flex items-center gap-1.5 bg-[#111] hover:bg-[#222] px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors"
                       >
-                        <Plus size={14} /> Add Text
+                        <Plus size={14} /> <span className="hidden md:inline">Add Text</span>
                       </button>
                       {isGeneratingBubbleFillPreview ? (
-                        <div className="flex items-center gap-1.5 bg-sky-900/40 px-3 py-1.5 rounded text-xs font-medium text-sky-200 border border-sky-800/50">
-                          <Loader2 size={14} className="animate-spin" /> Detecting bubble boxes...
+                        <div className="flex items-center gap-1.5 bg-sky-900/40 px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium text-sky-200 border border-sky-800/50">
+                          <Loader2 size={14} className="animate-spin" /> <span className="hidden sm:inline">Detecting bubble boxes...</span>
                         </div>
                       ) : bubbleFillPreview && bubbleFillPreview.imgId === selectedImage.id ? (
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={handleApplyBubbleFillPreview}
-                            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 rounded text-xs font-medium transition-colors text-white"
+                            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors text-white"
                             title="Apply detected bubble bounds"
                           >
                             <Wand2 size={14} /> Apply
                           </button>
                           <button
                             onClick={() => setBubbleFillPreview(null)}
-                            className="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded text-xs font-medium transition-colors text-slate-200"
+                            className="flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors text-slate-200"
                             title="Discard preview"
                           >
                             Cancel
@@ -3076,19 +3037,19 @@ export default function App() {
                       ) : (
                         <button
                           onClick={() => handleGenerateBubbleFillPreview(selectedImage.id)}
-                          className="flex items-center gap-1.5 bg-sky-900/40 hover:bg-sky-800 px-3 py-1.5 rounded text-xs font-medium transition-colors text-sky-200 border border-sky-800/50"
+                          className="flex items-center gap-1.5 bg-sky-900/40 hover:bg-sky-800 px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors text-sky-200 border border-sky-800/50"
                           title="Smart Center All Text Bubbles"
                         >
-                          <Wand2 size={14} /> Center All Bubbles
+                          <Wand2 size={14} /> <span className="hidden md:inline">Center All Bubbles</span>
                         </button>
                       )}
                       {selectedImage.status !== 'done' && (
                         <button
                           onClick={() => processImage(selectedImage)}
                           disabled={processingQueueProgress !== null}
-                          className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-3 py-1.5 rounded text-xs font-medium transition-colors"
+                          className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors"
                         >
-                          <Play size={14} /> Process Page
+                          <Play size={14} /> <span className="hidden md:inline">Process Page</span>
                         </button>
                       )}
                     </div>

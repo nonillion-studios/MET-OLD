@@ -147,8 +147,14 @@ export function floodFillBubbleDetailed(
   }
 
   const visited = new Uint8Array(width * height);
+  // Tracks only pixels confirmed to be inside the bubble's light interior (unlike `visited`,
+  // which also marks the dark boundary ring touching the fill so it isn't re-queued). The
+  // safe-bounds distance walk below must use this, not `visited`, or it treats the border
+  // itself as "inside" and can walk straight through it into whatever lies beyond the bubble.
+  const interior = new Uint8Array(width * height);
   const queue: [number, number][] = [[startX, startY]];
   visited[startY * width + startX] = 1;
+  interior[startY * width + startX] = 1;
 
   let minX = startX;
   let maxX = startX;
@@ -195,6 +201,7 @@ export function floodFillBubbleDetailed(
       const pxIdx = idx1D * 4;
       if (isLight(pxIdx)) {
         visited[idx1D] = 1;
+        interior[idx1D] = 1;
         queue.push([nx, ny]);
         bubblePoints.push([nx, ny]);
       } else {
@@ -220,19 +227,19 @@ export function floodFillBubbleDetailed(
 
   // Calculate maximum distance to safe bounding box edges to fit text accurately
   let distLeft = 0;
-  while (centerX - distLeft >= 0 && visited[Math.round(centerY) * width + Math.round(centerX - distLeft)] === 1 && distLeft < maxExtentX) {
+  while (centerX - distLeft >= 0 && interior[Math.round(centerY) * width + Math.round(centerX - distLeft)] === 1 && distLeft < maxExtentX) {
     distLeft++;
   }
   let distRight = 0;
-  while (centerX + distRight < width && visited[Math.round(centerY) * width + Math.round(centerX + distRight)] === 1 && distRight < maxExtentX) {
+  while (centerX + distRight < width && interior[Math.round(centerY) * width + Math.round(centerX + distRight)] === 1 && distRight < maxExtentX) {
     distRight++;
   }
   let distUp = 0;
-  while (centerY - distUp >= 0 && visited[Math.round(centerY - distUp) * width + Math.round(centerX)] === 1 && distUp < maxExtentY) {
+  while (centerY - distUp >= 0 && interior[Math.round(centerY - distUp) * width + Math.round(centerX)] === 1 && distUp < maxExtentY) {
     distUp++;
   }
   let distDown = 0;
-  while (centerY + distDown < height && visited[Math.round(centerY + distDown) * width + Math.round(centerX)] === 1 && distDown < maxExtentY) {
+  while (centerY + distDown < height && interior[Math.round(centerY + distDown) * width + Math.round(centerX)] === 1 && distDown < maxExtentY) {
     distDown++;
   }
 

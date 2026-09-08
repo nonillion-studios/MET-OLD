@@ -300,6 +300,8 @@ export function ImageEditor({
               {img && (
                 <KonvaImage
                   image={img}
+                  width={image.width}
+                  height={image.height}
                   name="bgImage"
                 />
               )}
