@@ -1,12 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ChevronUp, ChevronDown, X, FileText, Upload, BookOpen, List, MapPin, Flag } from 'lucide-react';
+import { ChevronUp, ChevronDown, X, FileText, Upload, BookOpen, List, MapPin, Flag, Sparkles, Loader2 } from 'lucide-react';
 import mammoth from 'mammoth';
 import { ProcessedImage } from '../types';
 import { parseTranslationDocText, detectPageMarkers } from '../lib/translationDoc';
 
+// "Same File" mode gives every page the entire script as its reference translation, so the
+// AI has to be told explicitly that it must pick out the portion relevant to that one page
+// instead of treating the whole thing as that page's ground truth.
+export const SAME_FILE_HINT_PREFIX = 'This is the FULL translated script for the entire comic, not just this page. Find the dialogue that matches the bubbles on THIS page and use only that portion as the ground-truth translation; ignore everything else in the script.\n\n---\n\n';
+
+type DocMode = 'manual' | 'same' | 'ai';
+
 interface TranslationDocsModalProps {
   images: ProcessedImage[];
   onConfirm: (pairings: { imageId: string, hint: string }[]) => void;
+  onAiAutoAssign: (paragraphs: string[]) => Promise<void>;
   onClose: () => void;
 }
 
@@ -70,7 +78,7 @@ function loadStoredDocState(): StoredDocState | null {
   }
 }
 
-export function TranslationDocsModal({ images, onConfirm, onClose }: TranslationDocsModalProps) {
+export function TranslationDocsModal({ images, onConfirm, onAiAutoAssign, onClose }: TranslationDocsModalProps) {
   const stored = useMemo(() => loadStoredDocState(), []);
 
   const [step, setStep] = useState<1 | 2>(stored ? 2 : 1);
@@ -81,6 +89,13 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
   const [unsupportedFile, setUnsupportedFile] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [pageBreakMarker, setPageBreakMarker] = useState(stored?.pageBreakMarker || '');
+
+  // Which pairing strategy to use once a document is loaded: 'manual' is the existing
+  // List/Paper View flow; 'same' hands the whole script to every page as-is; 'ai' calls the
+  // model once to assign every paragraph to a page number using the first/last page images.
+  const [docMode, setDocMode] = useState<DocMode>('manual');
+  const [aiAssigning, setAiAssigning] = useState(false);
+  const [aiAssignError, setAiAssignError] = useState<string | null>(null);
 
   // Paper View state: which page (index into `images`) is currently being marked, the
   // block-index start/end pointers for each page, and the block list for the full doc text.
@@ -123,6 +138,23 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
   };
 
   const startPairing = (paras: string[], fullText: string) => {
+    if (docMode === 'same') {
+      onConfirm(images.map(img => ({ imageId: img.id, hint: SAME_FILE_HINT_PREFIX + fullText.trim() })));
+      return;
+    }
+
+    if (docMode === 'ai') {
+      setAiAssignError(null);
+      setAiAssigning(true);
+      onAiAutoAssign(paras)
+        .catch(err => {
+          console.error('AI auto-assign failed', err);
+          setAiAssignError(err instanceof Error ? err.message : 'AI auto-assign failed.');
+        })
+        .finally(() => setAiAssigning(false));
+      return;
+    }
+
     const initial = images.map((_, idx) => paras[idx] ?? null);
     setParagraphs(paras);
     setPairings(initial);
@@ -335,13 +367,49 @@ export function TranslationDocsModal({ images, onConfirm, onClose }: Translation
 
         {step === 1 && (
           <div className="flex flex-col gap-4 overflow-y-auto pr-1">
-            <label className="flex flex-col items-center justify-center gap-2 border border-dashed border-sky-500/30 rounded-xl p-8 cursor-pointer hover:bg-blue-950/25 transition-all text-center">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs text-slate-400">Pairing mode</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {([
+                  { id: 'manual' as const, title: 'Manual Pairing', desc: 'Match text to pages yourself in List/Paper View.' },
+                  { id: 'same' as const, title: 'Same File Every Page', desc: 'Give the AI the whole script as reference on every page; it picks the relevant part itself.' },
+                  { id: 'ai' as const, title: 'AI Auto-Assign', desc: 'AI reads the script plus the first & last page images, then assigns each paragraph to a page.' },
+                ]).map(opt => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setDocMode(opt.id)}
+                    className={`text-left p-3 rounded-xl border transition-colors flex flex-col gap-1 ${
+                      docMode === opt.id ? 'border-sky-400 bg-sky-500/10' : 'border-sky-500/15 hover:border-sky-500/30 bg-black/20'
+                    }`}
+                  >
+                    <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                      {opt.id === 'ai' && <Sparkles size={12} className="text-sky-400" />} {opt.title}
+                    </span>
+                    <span className="text-[10px] text-slate-500">{opt.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {aiAssigning && (
+              <div className="flex items-center gap-2 bg-sky-950/30 border border-sky-500/25 rounded-lg px-3 py-2 text-xs text-sky-300">
+                <Loader2 size={14} className="animate-spin" /> Asking the AI to assign paragraphs to pages, using the first and last page images...
+              </div>
+            )}
+            {aiAssignError && (
+              <div className="text-xs text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2">
+                {aiAssignError}
+              </div>
+            )}
+
+            <label className={`flex flex-col items-center justify-center gap-2 border border-dashed border-sky-500/30 rounded-xl p-8 transition-all text-center ${aiAssigning ? 'opacity-50 pointer-events-none' : 'cursor-pointer hover:bg-blue-950/25'}`}>
               <Upload className="text-sky-400" size={28} />
               <span className="text-sm text-slate-300">Click to choose a .txt file</span>
               <input
                 type="file"
                 accept=".txt,.doc,.docx"
                 className="hidden"
+                disabled={aiAssigning}
                 onChange={handleFileChange}
               />
             </label>

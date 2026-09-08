@@ -23,6 +23,68 @@ export interface RawRegion {
   lineHeight: number;
 }
 
+// Mode 2 of Translation Docs: given the full paragraph list from an uploaded script and
+// only the first/last page images (for cover context, character-name grounding, and the
+// story's ending), asks the AI to assign every paragraph to a 1-based page number across
+// the known page count. Returns -1 for any paragraph the AI can't confidently place.
+export async function assignParagraphsToPages(
+  paragraphs: string[],
+  pageCount: number,
+  firstPage: { base64Image: string, mimeType: string },
+  lastPage: { base64Image: string, mimeType: string },
+  customApiKey?: string
+): Promise<number[]> {
+  const key = customApiKey;
+  if (!key) {
+    throw new Error("API Key is required");
+  }
+  const ai = new GoogleGenAI({ apiKey: key });
+
+  const numberedParagraphs = paragraphs.map((p, i) => `[${i}] ${p}`).join('\n\n');
+
+  const textPrompt = `You are helping paginate a translated manga script. The comic has exactly ${pageCount} pages (page numbers 1 to ${pageCount}). I'm giving you the FIRST page image and the LAST page image only (not the pages in between) for context - use them to recognize the story's opening and ending, character names, and tone.
+
+Below is the full translated script, split into ${paragraphs.length} numbered paragraphs, already in reading order from the first page to the last page:
+"""
+${numberedParagraphs}
+"""
+
+Distribute these paragraphs evenly and logically across the ${pageCount} pages in reading order (paragraph order must stay increasing with page number - never assign a later paragraph an earlier page than an earlier paragraph). Use the first/last page images to anchor paragraph 0 to page 1 and the final paragraph to page ${pageCount}. If a paragraph's page can't be determined confidently, still make your best estimate consistent with the surrounding paragraphs' pages - only use -1 if the paragraph is clearly not part of the story (e.g. a title page or credits note).
+
+Return ONLY a JSON array of ${paragraphs.length} integers (page numbers, 1-based, or -1), one per paragraph, in the exact same order as the numbered paragraphs above.`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [
+      { text: textPrompt },
+      { inlineData: { data: firstPage.base64Image.split(",")[1] || firstPage.base64Image, mimeType: firstPage.mimeType } },
+      { inlineData: { data: lastPage.base64Image.split(",")[1] || lastPage.base64Image, mimeType: lastPage.mimeType } },
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.ARRAY,
+        items: { type: Type.INTEGER }
+      }
+    }
+  });
+
+  const text = response.text;
+  if (!text) throw new Error("No text returned from Gemini");
+
+  try {
+    const pageNumbers = JSON.parse(text) as number[];
+    return paragraphs.map((_, i) => {
+      const pageNum = pageNumbers[i];
+      if (typeof pageNum !== 'number' || pageNum < 1 || pageNum > pageCount) return -1;
+      return pageNum - 1; // convert to 0-based image index
+    });
+  } catch (error) {
+    console.error("Failed to parse JSON", text);
+    throw new Error("Failed to parse AI response");
+  }
+}
+
 export async function generateInpaint(base64Image: string, mimeType: string, customApiKey?: string): Promise<string> {
   const key = customApiKey;
   if (!key) {

@@ -3,7 +3,7 @@ import Konva from 'konva';
 import { Upload, Download, Play, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, ZoomIn, ZoomOut, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Sparkles, Undo, Redo, Wand2, Scissors, Settings, Search, X, FileText } from 'lucide-react';
 import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingleImage } from './lib/zip';
 import { buildPagePsd } from './lib/psdExport';
-import { processMangaPages, RawRegion } from './lib/gemini';
+import { processMangaPages, assignParagraphsToPages, RawRegion } from './lib/gemini';
 import { processMangaPagesOllama } from './lib/ollama';
 import { buildTypesettingPrompt, PageHint } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
@@ -1431,6 +1431,45 @@ export default function App() {
     const splitNote = `[Context: this image is part ${(img.splitIndex ?? 0) + 1} of ${siblingCount} of a longer vertical strip that was split for processing; bubbles near the top or bottom edge may continue from/into the adjacent part]`;
 
     return existingHint ? `${existingHint}\n${splitNote}` : splitNote;
+  };
+
+  // Translation Docs "AI Auto-Assign" mode: one Gemini call over the whole paragraph list
+  // plus the first/last page images decides which page each paragraph belongs to, then we
+  // write each page's assigned text into userTranslationHint the same way manual pairing
+  // does (so the normal per-page ground-truth prompt wording already handles it correctly).
+  const handleAiAutoAssignTranslationDoc = async (paragraphs: string[]) => {
+    const keysList = customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean);
+    const geminiKey = keysList[0];
+    if (!geminiKey) {
+      throw new Error('A Gemini API key is required for AI Auto-Assign. Add one in Settings first.');
+    }
+    if (images.length === 0) {
+      throw new Error('Upload manga pages before using AI Auto-Assign.');
+    }
+
+    const firstImg = images[0];
+    const lastImg = images[images.length - 1];
+
+    const pageIndices = await assignParagraphsToPages(
+      paragraphs,
+      images.length,
+      { base64Image: firstImg.dataUrl, mimeType: firstImg.mimeType },
+      { base64Image: lastImg.dataUrl, mimeType: lastImg.mimeType },
+      geminiKey
+    );
+
+    const hints: string[] = images.map(() => '');
+    paragraphs.forEach((paragraph, i) => {
+      const pageIdx = pageIndices[i];
+      if (pageIdx < 0 || pageIdx >= images.length) return;
+      hints[pageIdx] = hints[pageIdx] ? `${hints[pageIdx]}\n\n${paragraph}` : paragraph;
+    });
+
+    images.forEach((img, idx) => {
+      if (hints[idx]) updateImage(img.id, { userTranslationHint: hints[idx] });
+    });
+
+    setShowTranslationDocsModal(false);
   };
 
   interface UltraSlot {
@@ -4064,6 +4103,7 @@ export default function App() {
             });
             setShowTranslationDocsModal(false);
           }}
+          onAiAutoAssign={handleAiAutoAssignTranslationDoc}
         />
       )}
 
