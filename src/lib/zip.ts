@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
 import { saveAs } from 'file-saver';
 import { ProcessedImage } from '../types';
-import { calculateAutoFitFontSize, measureWrappedTextHeight, wrapRtlLines } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines } from '../utils/textUtils';
 
 export async function extractImagesFromZip(file: File): Promise<ProcessedImage[]> {
   const zip = await JSZip.loadAsync(file);
@@ -126,36 +126,38 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
       );
     }
 
+    let renderWidth = region.width;
     let renderHeight = region.height;
+    let xOffset = 0;
     let yOffset = 0;
     if (region.translatedText) {
-      const requiredHeight = measureWrappedTextHeight(
+      ({ renderWidth, renderHeight, xOffset, yOffset } = calculateAutoFitBox(
         region.translatedText,
+        region.x,
+        region.y,
         region.width,
+        region.height,
         region.fontFamily,
         fontStyleStr,
         region.lineHeight || 1.2,
         region.letterSpacing || 0,
-        renderFontSize
-      );
-      if (requiredHeight > region.height) {
-        const extra = requiredHeight - region.height;
-        renderHeight = requiredHeight;
-        yOffset = -extra / 2;
-        // Clamp so the expanded box doesn't extend past the page's top/bottom edge
-        if (region.y + yOffset < 0) {
-          yOffset = -region.y;
-        }
-        if (region.y + yOffset + renderHeight > img.height) {
-          yOffset = Math.min(yOffset, img.height - renderHeight - region.y);
-        }
-      }
+        renderFontSize,
+        img.width,
+        img.height
+      ));
     }
 
-    const group = new Konva.Group({ x: region.x, y: region.y + yOffset, width: region.width, height: renderHeight, rotation: region.angle, opacity: region.opacity ?? 1 });
+    // The outer group stays pinned to the region's own top-left/rotation pivot (matching
+    // the studio editor exactly); the grow offset is applied to the Text node's LOCAL
+    // position instead, i.e. inside the already-rotated frame. Applying it to the group's
+    // own x/y instead (pre-rotation) would shift the rotation pivot itself and diverge
+    // from the studio for any angled SFX/text.
+    const group = new Konva.Group({ x: region.x, y: region.y, width: region.width, height: region.height, rotation: region.angle, opacity: region.opacity ?? 1 });
     group.add(new Konva.Text({
       text: region.translatedText ? wrapRtlLines(region.translatedText) : '',
-      width: region.width,
+      x: xOffset,
+      y: yOffset,
+      width: renderWidth,
       height: renderHeight,
       fill: region.textColor,
       stroke: region.strokeColor !== 'transparent' ? region.strokeColor : undefined, 

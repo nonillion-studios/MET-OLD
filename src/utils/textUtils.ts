@@ -124,3 +124,69 @@ export function measureWrappedTextHeight(
   node.destroy();
   return height;
 }
+
+export interface AutoFitBox {
+  renderWidth: number;
+  renderHeight: number;
+  xOffset: number;
+  yOffset: number;
+}
+
+// Grows a region's rendered box beyond its detected bounds, symmetrically around its
+// center and clamped to the page, whenever text would otherwise be clipped.
+//
+// calculateAutoFitFontSize has an absolute floor (9px) it will accept even when the
+// longest word STILL doesn't fit the region's width at that size - and since Konva's
+// wrap:'word' never breaks a word mid-glyph, that word just overflows sideways past the
+// region instead of wrapping. On a narrow bubble (e.g. a flood-filled balloon that came
+// out taller than it is wide) that overflow lands past the bubble's visible fill, on the
+// artwork behind it - the text isn't gone, it's rendered somewhere invisible. This widens
+// the box first so the wrap actually has room, THEN re-measures the height growth the
+// three render paths (studio canvas, ZIP/PDF export, PSD export) already each did
+// separately - centralized here so all three stay in sync.
+export function calculateAutoFitBox(
+  text: string,
+  regionX: number,
+  regionY: number,
+  regionWidth: number,
+  regionHeight: number,
+  fontFamily: string,
+  fontStyle: string,
+  lineHeight: number,
+  letterSpacing: number,
+  fontSize: number,
+  pageWidth: number,
+  pageHeight: number
+): AutoFitBox {
+  if (!text) return { renderWidth: regionWidth, renderHeight: regionHeight, xOffset: 0, yOffset: 0 };
+
+  const words = text.split(/\s+/).filter(Boolean);
+  const longestWord = words.reduce((a, b) => (b.length > a.length ? b : a), '');
+  const measureNode = new Konva.Text({ text: longestWord, fontFamily, fontStyle, fontSize, letterSpacing });
+  const longestWordWidth = measureNode.width();
+  measureNode.destroy();
+
+  let renderWidth = regionWidth;
+  let xOffset = 0;
+  // Small buffer so a word that fits within rounding error doesn't trigger a needless grow.
+  if (longestWordWidth > regionWidth * 1.02) {
+    renderWidth = longestWordWidth * 1.06;
+    const extra = renderWidth - regionWidth;
+    xOffset = -extra / 2;
+    if (regionX + xOffset < 0) xOffset = -regionX;
+    if (regionX + xOffset + renderWidth > pageWidth) xOffset = Math.min(xOffset, pageWidth - renderWidth - regionX);
+  }
+
+  const requiredHeight = measureWrappedTextHeight(text, renderWidth, fontFamily, fontStyle, lineHeight, letterSpacing, fontSize);
+  let renderHeight = regionHeight;
+  let yOffset = 0;
+  if (requiredHeight > regionHeight) {
+    const extra = requiredHeight - regionHeight;
+    renderHeight = requiredHeight;
+    yOffset = -extra / 2;
+    if (regionY + yOffset < 0) yOffset = -regionY;
+    if (regionY + yOffset + renderHeight > pageHeight) yOffset = Math.min(yOffset, pageHeight - renderHeight - regionY);
+  }
+
+  return { renderWidth, renderHeight, xOffset, yOffset };
+}

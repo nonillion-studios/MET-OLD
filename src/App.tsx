@@ -3,7 +3,7 @@ import Konva from 'konva';
 import { Upload, Download, Play, Loader2, Image as ImageIcon, Type as TypeIcon, MousePointer2, Brush, Eraser, ZoomIn, ZoomOut, Plus, Pipette, Trash2, ChevronUp, ChevronDown, ImagePlus, Sparkles, Undo, Redo, Wand2, Scissors, Settings, Search, X, FileText } from 'lucide-react';
 import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingleImage } from './lib/zip';
 import { buildPagePsd } from './lib/psdExport';
-import { processMangaPages, RawRegion } from './lib/gemini';
+import { processMangaPages, assignParagraphsToPages, RawRegion } from './lib/gemini';
 import { processMangaPagesOllama } from './lib/ollama';
 import { buildTypesettingPrompt, PageHint } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
@@ -145,7 +145,13 @@ export default function App() {
   const [autoEnhanceAfterProcess, setAutoEnhanceAfterProcess] = useState<boolean>(() => {
     return localStorage.getItem('manga_auto_enhance_after_process') !== 'false';
   });
-  
+  const [psdTightCrop, setPsdTightCrop] = useState<boolean>(() => {
+    return localStorage.getItem('manga_psd_tight_crop') === 'true';
+  });
+  const [psdFlatten, setPsdFlatten] = useState<boolean>(() => {
+    return localStorage.getItem('manga_psd_flatten') === 'true';
+  });
+
   const [customFonts, setCustomFonts] = useState<string[]>([]);
   const [showExternalAIModal, setShowExternalAIModal] = useState(false);
   const [externalAIPasteData, setExternalAIPasteData] = useState('');
@@ -340,6 +346,16 @@ export default function App() {
   const handleSetAutoEnhanceAfterProcess = (val: boolean) => {
     setAutoEnhanceAfterProcess(val);
     localStorage.setItem('manga_auto_enhance_after_process', String(val));
+  };
+
+  const handleSetPsdTightCrop = (val: boolean) => {
+    setPsdTightCrop(val);
+    localStorage.setItem('manga_psd_tight_crop', String(val));
+  };
+
+  const handleSetPsdFlatten = (val: boolean) => {
+    setPsdFlatten(val);
+    localStorage.setItem('manga_psd_flatten', String(val));
   };
 
   const compressImageBase64 = async (base64: string, maxDim: number = 1600, quality: number = 0.85): Promise<string> => {
@@ -873,14 +889,43 @@ export default function App() {
   // Runs bubble-centering + oval kashida justification on a freshly-processed image's
   // regions, without depending on selection or state (regions may not be committed yet).
   // Used by the auto-enhance-after-processing pipeline (autoEnhanceAfterProcess setting).
-  const autoEnhanceRegionsForImage = async (imgDataUrl: string, regions: Region[]): Promise<Region[]> => {
-    const { newRegions } = await computeBubbleFillForRegions(imgDataUrl, regions);
-    return newRegions.map(region => {
+  // Also reports whether it actually centered anything, so the caller can surface a toast
+  // when the setting is on but centering silently found nothing to do (e.g. the flood fill
+  // couldn't find bubble interiors on this page) rather than the page just looking
+  // unchanged with no explanation.
+  const autoEnhanceRegionsForImage = async (
+    imgDataUrl: string,
+    regions: Region[]
+  ): Promise<{ regions: Region[]; bubbleCount: number; centeredCount: number }> => {
+    const { newRegions, changed } = await computeBubbleFillForRegions(imgDataUrl, regions);
+    const bubbleCount = regions.filter(r => r.type === 'bubble').length;
+    const centeredCount = changed ? newRegions.filter(r => r.type === 'bubble' && r.bubbleContour).length : 0;
+    const finalRegions = newRegions.map(region => {
       if (region.type !== 'bubble') return region;
       const kashidaText = computeOvalKashidaText(region);
       if (kashidaText === null) return region;
       return { ...region, translatedText: kashidaText, textAlign: 'center' as const };
     });
+    return { regions: finalRegions, bubbleCount, centeredCount };
+  };
+
+  // Shared toast for autoEnhanceRegionsForImage callers: only fires when there WERE bubbles
+  // to center but none of them actually got centered, so a real (usually flood-fill)
+  // failure is visible instead of silently leaving regions un-centered.
+  const notifyAutoCenterFailureIfNeeded = (pageLabel: string, bubbleCount: number, centeredCount: number) => {
+    if (bubbleCount > 0 && centeredCount === 0) {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'warning',
+        title: 'Auto-centering found nothing to center',
+        text: `${pageLabel}: none of the ${bubbleCount} bubble(s) could be flood-filled automatically. You can center them manually.`,
+        showConfirmButton: false,
+        timer: 3500,
+        background: '#120b24',
+        color: '#f8fafc'
+      });
+    }
   };
 
   const applyKashidaHarmony = (style: 'oval' | 'rectangular') => {
@@ -1016,7 +1061,7 @@ export default function App() {
 
     Swal.fire({
       title: 'Generating Photoshop PSD files...',
-      text: 'Rendering the background art and one editable text layer per bubble for each page...',
+      html: `Rendering page 1 of ${images.length}...`,
       allowOutsideClick: false,
       didOpen: () => {
         Swal.showLoading();
@@ -1030,7 +1075,8 @@ export default function App() {
 
       for (let i = 0; i < images.length; i++) {
         const img = images[i];
-        const buffer = await buildPagePsd(img);
+        Swal.update({ html: `Rendering page ${i + 1} of ${images.length}${img.filename ? ` (${img.filename})` : ''}...` });
+        const buffer = await buildPagePsd(img, { tightCrop: psdTightCrop, flatten: psdFlatten });
         zip.file(`Page_${String(i + 1).padStart(3, '0')}.psd`, buffer);
       }
 
@@ -1048,7 +1094,7 @@ export default function App() {
       });
     } catch (err) {
       console.error(err);
-      Swal.fire('Export Error', 'Failed to write the exported PSD file.', 'error');
+      Swal.fire('Export Error', err instanceof Error ? err.message : 'Failed to write the exported PSD file.', 'error');
     }
   };
 
@@ -1433,6 +1479,45 @@ export default function App() {
     return existingHint ? `${existingHint}\n${splitNote}` : splitNote;
   };
 
+  // Translation Docs "AI Auto-Assign" mode: one Gemini call over the whole paragraph list
+  // plus the first/last page images decides which page each paragraph belongs to, then we
+  // write each page's assigned text into userTranslationHint the same way manual pairing
+  // does (so the normal per-page ground-truth prompt wording already handles it correctly).
+  const handleAiAutoAssignTranslationDoc = async (paragraphs: string[]) => {
+    const keysList = customApiKey.split(/[\s,\n]+/).map(k => k.trim()).filter(Boolean);
+    const geminiKey = keysList[0];
+    if (!geminiKey) {
+      throw new Error('A Gemini API key is required for AI Auto-Assign. Add one in Settings first.');
+    }
+    if (images.length === 0) {
+      throw new Error('Upload manga pages before using AI Auto-Assign.');
+    }
+
+    const firstImg = images[0];
+    const lastImg = images[images.length - 1];
+
+    const pageIndices = await assignParagraphsToPages(
+      paragraphs,
+      images.length,
+      { base64Image: firstImg.dataUrl, mimeType: firstImg.mimeType },
+      { base64Image: lastImg.dataUrl, mimeType: lastImg.mimeType },
+      geminiKey
+    );
+
+    const hints: string[] = images.map(() => '');
+    paragraphs.forEach((paragraph, i) => {
+      const pageIdx = pageIndices[i];
+      if (pageIdx < 0 || pageIdx >= images.length) return;
+      hints[pageIdx] = hints[pageIdx] ? `${hints[pageIdx]}\n\n${paragraph}` : paragraph;
+    });
+
+    images.forEach((img, idx) => {
+      if (hints[idx]) updateImage(img.id, { userTranslationHint: hints[idx] });
+    });
+
+    setShowTranslationDocsModal(false);
+  };
+
   interface UltraSlot {
     detection: DetectorDetection;
     geometry: ReturnType<typeof resolveBubblePolygon>;
@@ -1617,9 +1702,12 @@ export default function App() {
 
     let finalRegions = [...newRegions, ...extraRegions];
     if (autoEnhanceAfterProcess) {
+      setProcessingStatusLog(`Centering bubbles on ${img.filename}...`);
       // Use the whitened/inpainted dataUrl (not the original source-language image) so the
       // source text doesn't block the flood fill the same way the manual bubble-fill does.
-      finalRegions = await autoEnhanceRegionsForImage(img.dataUrl, finalRegions);
+      const enhanceResult = await autoEnhanceRegionsForImage(img.dataUrl, finalRegions);
+      finalRegions = enhanceResult.regions;
+      notifyAutoCenterFailureIfNeeded(img.filename, enhanceResult.bubbleCount, enhanceResult.centeredCount);
     }
 
     setProcessingStatusLog(null);
@@ -1736,7 +1824,10 @@ export default function App() {
         finalRegions = await traceRegionsWithBubbleDetection(img.dataUrl, newRegions);
       }
       if (autoEnhanceAfterProcess) {
-        finalRegions = await autoEnhanceRegionsForImage(img.dataUrl, finalRegions);
+        setProcessingStatusLog(`Centering bubbles on ${img.filename}...`);
+        const enhanceResult = await autoEnhanceRegionsForImage(img.dataUrl, finalRegions);
+        finalRegions = enhanceResult.regions;
+        notifyAutoCenterFailureIfNeeded(img.filename, enhanceResult.bubbleCount, enhanceResult.centeredCount);
       }
 
       setProcessingStatusLog(null);
@@ -3974,6 +4065,32 @@ export default function App() {
                           <span className="text-[10px] text-slate-500 mt-0.5">Automatically runs bubble-centering and Arabic kashida justification once the AI finishes a page.</span>
                         </span>
                       </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={psdTightCrop}
+                          onChange={(e) => handleSetPsdTightCrop(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">PSD: Tight-Crop Text Layers</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Smaller/faster-to-open PSDs. Off by default: full-page text layers never clip rotated text.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={psdFlatten}
+                          onChange={(e) => handleSetPsdFlatten(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">PSD: Flatten to Single Layer</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Bakes the background and all text into one layer per page instead of keeping per-bubble text layers.</span>
+                        </span>
+                      </label>
                     </div>
                   </div>
 
@@ -4064,6 +4181,7 @@ export default function App() {
             });
             setShowTranslationDocsModal(false);
           }}
+          onAiAutoAssign={handleAiAutoAssignTranslationDoc}
         />
       )}
 
