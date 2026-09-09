@@ -6,7 +6,7 @@
 import { writePsd } from 'ag-psd';
 import Konva from 'konva';
 import { ProcessedImage } from '../types';
-import { calculateAutoFitFontSize, measureWrappedTextHeight, wrapRtlLines } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines } from '../utils/textUtils';
 
 async function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -15,6 +15,16 @@ async function loadImage(src: string): Promise<HTMLImageElement> {
     im.onerror = reject;
     im.src = src;
   });
+}
+
+// document.fonts.ready resolves once and stays resolved, but awaiting the raw promise
+// still costs a microtask hop on every call; cache it so a multi-page PSD export doesn't
+// re-await it per page.
+let fontsReadyPromise: Promise<unknown> | null = null;
+function waitForFontsReady(): Promise<unknown> {
+  if (!('fonts' in document)) return Promise.resolve();
+  if (!fontsReadyPromise) fontsReadyPromise = (document as any).fonts.ready;
+  return fontsReadyPromise;
 }
 
 // Layer 1+2 of the normal export renderer (background art, paint strokes, region bg fills)
@@ -83,10 +93,26 @@ async function renderBackgroundCanvas(img: ProcessedImage): Promise<HTMLCanvasEl
   return canvas;
 }
 
-// One full-page-sized transparent canvas per text region, positioned/rotated by Konva
-// exactly like layer 3 of the normal export - kept full-page (rather than tightly cropped)
-// so rotated text doesn't get clipped by a naive bounding box.
-async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage['regions'][number]): Promise<HTMLCanvasElement | null> {
+// A rotated rect's axis-aligned bounding box is wider/taller than the rect itself; this
+// computes that box (relative to the rect's own top-left) so a "tight crop" text layer
+// canvas can be sized to contain the rotated text without clipping it.
+function rotatedBoundingBox(width: number, height: number, angleDeg: number): { width: number; height: number; offsetX: number; offsetY: number } {
+  const rad = (angleDeg * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const w = width * cos + height * sin;
+  const h = width * sin + height * cos;
+  return { width: w, height: h, offsetX: (w - width) / 2, offsetY: (h - height) / 2 };
+}
+
+// Full-page-sized transparent canvas per text region, positioned/rotated by Konva exactly
+// like layer 3 of the normal export. Full-page is the safe default since ag-psd layer
+// canvases carry no rotation metadata of their own - the rotation is baked into the pixels,
+// so a canvas that's too tight WILL clip an angled bubble/SFX. `tightCrop` opts into a
+// canvas sized to the region's rotated bounding box (plus padding) instead, trading a
+// little of that safety margin for much smaller/faster-to-open PSDs when pages have many
+// small regions.
+async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage['regions'][number], tightCrop: boolean): Promise<{ canvas: HTMLCanvasElement; left: number; top: number } | null> {
   if (!region.translatedText || !region.translatedText.trim()) return null;
 
   const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
@@ -99,27 +125,49 @@ async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage
     );
   }
 
-  let renderHeight = region.height;
-  let yOffset = 0;
-  const requiredHeight = measureWrappedTextHeight(
-    region.translatedText, region.width, region.fontFamily, fontStyleStr,
-    region.lineHeight || 1.2, region.letterSpacing || 0, renderFontSize
+  // Grows the rendered box (width first, then height) exactly like the studio editor and
+  // the ZIP/PDF export do - see calculateAutoFitBox for why width has to be checked too.
+  const { renderWidth, renderHeight, xOffset, yOffset } = calculateAutoFitBox(
+    region.translatedText, region.x, region.y, region.width, region.height,
+    region.fontFamily, fontStyleStr, region.lineHeight || 1.2, region.letterSpacing || 0,
+    renderFontSize, img.width, img.height
   );
-  if (requiredHeight > region.height) {
-    const extra = requiredHeight - region.height;
-    renderHeight = requiredHeight;
-    yOffset = -extra / 2;
-    if (region.y + yOffset < 0) yOffset = -region.y;
-    if (region.y + yOffset + renderHeight > img.height) yOffset = Math.min(yOffset, img.height - renderHeight - region.y);
+
+  // Padding beyond the rotated bounding box to absorb stroke/shadow bleed at the edges.
+  const CROP_PADDING = 16;
+
+  let stageWidth = img.width;
+  let stageHeight = img.height;
+  let originX = 0;
+  let originY = 0;
+
+  if (tightCrop) {
+    const bbox = rotatedBoundingBox(renderWidth, renderHeight, region.angle);
+    const centerX = region.x + xOffset + renderWidth / 2;
+    const centerY = region.y + yOffset + renderHeight / 2;
+    const cropLeft = Math.floor(Math.max(0, centerX - bbox.width / 2 - CROP_PADDING));
+    const cropTop = Math.floor(Math.max(0, centerY - bbox.height / 2 - CROP_PADDING));
+    const cropRight = Math.ceil(Math.min(img.width, centerX + bbox.width / 2 + CROP_PADDING));
+    const cropBottom = Math.ceil(Math.min(img.height, centerY + bbox.height / 2 + CROP_PADDING));
+    originX = cropLeft;
+    originY = cropTop;
+    stageWidth = Math.max(1, cropRight - cropLeft);
+    stageHeight = Math.max(1, cropBottom - cropTop);
   }
 
+  // The group stays pinned to the region's own top-left/rotation pivot (matching the
+  // studio editor); the grow offset is applied to the Text node's LOCAL position inside
+  // the already-rotated frame instead of shifting the group's pivot - see zip.ts for the
+  // same reasoning.
   const container = document.createElement('div');
-  const stage = new Konva.Stage({ container, width: img.width, height: img.height });
+  const stage = new Konva.Stage({ container, width: stageWidth, height: stageHeight });
   const layer = new Konva.Layer();
-  const group = new Konva.Group({ x: region.x, y: region.y + yOffset, width: region.width, height: renderHeight, rotation: region.angle, opacity: region.opacity ?? 1 });
+  const group = new Konva.Group({ x: region.x - originX, y: region.y - originY, width: region.width, height: region.height, rotation: region.angle, opacity: region.opacity ?? 1 });
   group.add(new Konva.Text({
     text: wrapRtlLines(region.translatedText),
-    width: region.width,
+    x: xOffset,
+    y: yOffset,
+    width: renderWidth,
     height: renderHeight,
     fill: region.textColor,
     stroke: region.strokeColor !== 'transparent' ? region.strokeColor : undefined,
@@ -141,43 +189,78 @@ async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage
   await new Promise(resolve => setTimeout(resolve, 10));
   const canvas = stage.toCanvas({ pixelRatio: 1 });
   stage.destroy();
-  return canvas;
+  return { canvas, left: originX, top: originY };
 }
 
-// Builds one real, editable-layers PSD ArrayBuffer for a page: a flattened "Background"
-// layer plus one named, individually positioned/hideable text layer per bubble/SFX region.
-export async function buildPagePsd(img: ProcessedImage): Promise<ArrayBuffer> {
-  if ('fonts' in document && (document as any).fonts.status !== 'loaded') {
-    await (document as any).fonts.ready;
+export interface BuildPagePsdOptions {
+  // Crop each text layer's canvas to its rotated bounding box instead of the full page.
+  // Smaller/faster-to-open PSDs, at a (small, padded) risk of clipping extreme rotations.
+  tightCrop?: boolean;
+  // Bake the background and every text region into a single flattened layer instead of
+  // keeping per-bubble text layers - useful when the receiving workflow only ever needs
+  // the finished page and per-layer editability would just add file size/open time.
+  flatten?: boolean;
+}
+
+// The first 4 bytes of any valid .psd/.psb file ("8BPS"), used as a cheap sanity check
+// that ag-psd actually produced a well-formed file rather than silently writing a
+// truncated/corrupt buffer that would only surface as "Photoshop can't open this file"
+// much later, disconnected from the export action that caused it.
+const PSD_MAGIC = '8BPS';
+function assertValidPsdSignature(buffer: ArrayBuffer, pageLabel: string) {
+  const bytes = new Uint8Array(buffer.slice(0, 4));
+  const signature = String.fromCharCode(...bytes);
+  if (signature !== PSD_MAGIC) {
+    throw new Error(`Generated PSD for "${pageLabel}" is malformed (bad signature "${signature}") - refusing to export a broken file.`);
   }
+}
+
+// Builds one real PSD ArrayBuffer for a page. By default: a flattened "Background" layer
+// plus one named, individually positioned/hideable text layer per bubble/SFX region. See
+// BuildPagePsdOptions for the tight-crop and single-layer-flatten variants.
+export async function buildPagePsd(img: ProcessedImage, options: BuildPagePsdOptions = {}): Promise<ArrayBuffer> {
+  await waitForFontsReady();
 
   const bgCanvas = await renderBackgroundCanvas(img);
 
-  const textLayers: any[] = [];
+  const textLayerResults: { canvas: HTMLCanvasElement; left: number; top: number; label: string }[] = [];
   for (const region of img.regions) {
-    const canvas = await renderTextLayerCanvas(img, region);
-    if (!canvas) continue;
+    const result = await renderTextLayerCanvas(img, region, !!options.tightCrop);
+    if (!result) continue;
     const label = (region.translatedText || 'Text').replace(/\s+/g, ' ').trim().slice(0, 60) || 'Text';
-    textLayers.push({
-      name: label,
-      left: 0,
-      top: 0,
-      right: img.width,
-      bottom: img.height,
-      canvas,
-      opacity: 255,
-      blendMode: 'normal'
-    });
+    textLayerResults.push({ ...result, label });
   }
 
-  const psd = {
-    width: img.width,
-    height: img.height,
-    children: [
+  let children: any[];
+  if (options.flatten) {
+    const flatCanvas = document.createElement('canvas');
+    flatCanvas.width = img.width;
+    flatCanvas.height = img.height;
+    const ctx = flatCanvas.getContext('2d')!;
+    ctx.drawImage(bgCanvas, 0, 0);
+    for (const layer of textLayerResults) {
+      ctx.drawImage(layer.canvas, layer.left, layer.top);
+    }
+    children = [{ name: 'Flattened Page', left: 0, top: 0, right: img.width, bottom: img.height, canvas: flatCanvas }];
+  } else {
+    children = [
       { name: 'Background (Clean Art)', left: 0, top: 0, right: img.width, bottom: img.height, canvas: bgCanvas },
-      ...textLayers
-    ]
-  };
+      ...textLayerResults.map(layer => ({
+        name: layer.label,
+        left: layer.left,
+        top: layer.top,
+        right: layer.left + layer.canvas.width,
+        bottom: layer.top + layer.canvas.height,
+        canvas: layer.canvas,
+        opacity: 255,
+        blendMode: 'normal'
+      }))
+    ];
+  }
 
-  return writePsd(psd as any, { generateThumbnail: true });
+  const psd = { width: img.width, height: img.height, children };
+
+  const buffer = writePsd(psd as any, { generateThumbnail: true });
+  assertValidPsdSignature(buffer, img.filename || 'page');
+  return buffer;
 }

@@ -3,7 +3,7 @@ import Konva from 'konva';
 import { Stage, Layer, Image as KonvaImage, Rect, Text, Group, Transformer, Line } from 'react-konva';
 import useImage from 'use-image';
 import { ProcessedImage, Region, PaintStroke, Tool } from '../types';
-import { calculateAutoFitFontSize, measureWrappedTextHeight, wrapRtlLines } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines } from '../utils/textUtils';
 import { Loader2 } from 'lucide-react';
 
 interface ImageEditorProps {
@@ -22,7 +22,7 @@ interface ImageEditorProps {
   processingStatusLog?: string | null;
 }
 
-const AutoFitText = ({ region, pageHeight }: { region: Region; pageHeight: number }) => {
+const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWidth: number; pageHeight: number }) => {
   const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
 
   const fontSize = useMemo(() => {
@@ -51,49 +51,48 @@ const AutoFitText = ({ region, pageHeight }: { region: Region; pageHeight: numbe
     region.letterSpacing
   ]);
 
-  // Ensure the box never clips the text: grow the rendered height (centered on the
-  // region's vertical middle, clamped to the page bounds) if the wrapped text at the
-  // effective font size doesn't fit within region.height.
-  const { renderHeight, yOffset } = useMemo(() => {
-    if (!region.translatedText) return { renderHeight: region.height, yOffset: 0 };
-    const requiredHeight = measureWrappedTextHeight(
+  // Ensure the box never clips the text: grow the rendered width first (a single word
+  // wider than region.width can't be broken by wrap:'word' and would otherwise overflow
+  // sideways, past the bubble's visible fill and onto the art behind it - see
+  // calculateAutoFitBox), then the rendered height for wrapped lines taller than
+  // region.height. Both grow centered on the region and clamp to the page bounds.
+  const { renderWidth, renderHeight, xOffset, yOffset } = useMemo(() => {
+    if (!region.translatedText) return { renderWidth: region.width, renderHeight: region.height, xOffset: 0, yOffset: 0 };
+    return calculateAutoFitBox(
       region.translatedText,
+      region.x,
+      region.y,
       region.width,
+      region.height,
       region.fontFamily,
       fontStyleStr,
       region.lineHeight || 1.2,
       region.letterSpacing || 0,
-      fontSize
+      fontSize,
+      pageWidth,
+      pageHeight
     );
-    if (requiredHeight <= region.height) return { renderHeight: region.height, yOffset: 0 };
-
-    const extra = requiredHeight - region.height;
-    let offset = -extra / 2;
-    if (region.y + offset < 0) {
-      offset = -region.y;
-    }
-    if (region.y + offset + requiredHeight > pageHeight) {
-      offset = Math.min(offset, pageHeight - requiredHeight - region.y);
-    }
-    return { renderHeight: requiredHeight, yOffset: offset };
   }, [
     region.translatedText,
+    region.x,
+    region.y,
     region.width,
     region.height,
     region.fontFamily,
     fontStyleStr,
     region.lineHeight,
     region.letterSpacing,
-    region.y,
     fontSize,
+    pageWidth,
     pageHeight
   ]);
 
   return (
     <Text
       text={region.translatedText ? wrapRtlLines(region.translatedText) : ''}
+      x={xOffset}
       y={yOffset}
-      width={region.width}
+      width={renderWidth}
       height={renderHeight}
       fill={region.textColor}
       stroke={region.strokeColor !== 'transparent' ? region.strokeColor : undefined}
@@ -167,13 +166,24 @@ export function ImageEditor({
         }
       };
 
+      // Debounce: ResizeObserver fires on every intermediate frame while a panel is being
+      // dragged/animated open, and each firing forces a Stage-size React re-render across
+      // every region on the page - noticeably janky on larger pages. A short trailing
+      // debounce collapses a resize burst into one final layout pass.
+      let debounceHandle: ReturnType<typeof setTimeout> | null = null;
+      const debouncedResize = () => {
+        if (debounceHandle) clearTimeout(debounceHandle);
+        debounceHandle = setTimeout(resize, 80);
+      };
+
       resize();
-      const observer = new ResizeObserver(resize);
+      const observer = new ResizeObserver(debouncedResize);
       observer.observe(containerRef.current);
-      window.addEventListener('resize', resize);
+      window.addEventListener('resize', debouncedResize);
       return () => {
+        if (debounceHandle) clearTimeout(debounceHandle);
         observer.disconnect();
-        window.removeEventListener('resize', resize);
+        window.removeEventListener('resize', debouncedResize);
       };
     }
   }, []);
@@ -416,7 +426,7 @@ export function ImageEditor({
                     }}
                   >
                     <Rect width={region.width} height={region.height} fill="transparent" />
-                    <AutoFitText region={region} pageHeight={image.height} />
+                    <AutoFitText region={region} pageWidth={image.width} pageHeight={image.height} />
                   </Group>
                 ))}
 
