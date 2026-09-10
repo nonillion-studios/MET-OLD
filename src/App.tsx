@@ -2255,14 +2255,19 @@ export default function App() {
           </div>
         </div>
       )}
-      {/* Topbar */}
-      {activeNavigationTab === 'library' && activeChapterId !== null && (
+      {/* Topbar hide/show toggle. Only floats fixed-and-centered when there's no header
+          row to collide with (topbar hidden) - when the header IS showing, this renders
+          as a normal item inside its horizontally-scrolling flex row instead (see below),
+          because a fixed-centered circle drifts on top of whatever happens to sit at the
+          viewport's horizontal midpoint, which on narrow screens was the header's own
+          action buttons. */}
+      {activeNavigationTab === 'library' && activeChapterId !== null && !showTopbar && (
         <button
           onClick={() => setShowTopbar(v => !v)}
           className="fixed top-2 right-1/2 translate-x-1/2 z-50 flex items-center justify-center w-8 h-8 rounded-full bg-black/60 hover:bg-black/80 border border-sky-500/30 text-sky-300 hover:text-white backdrop-blur-md transition-all shadow-lg"
-          title={showTopbar ? 'Hide Topbar' : 'Show Topbar'}
+          title="Show Topbar"
         >
-          {showTopbar ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          <ChevronDown size={16} />
         </button>
       )}
       {activeNavigationTab === 'library' && activeChapterId !== null && showTopbar && (
@@ -2376,6 +2381,14 @@ export default function App() {
               PDF
             </button>
           </div>
+
+          <button
+            onClick={() => setShowTopbar(false)}
+            className="flex items-center justify-center w-8 h-8 rounded-full bg-black/40 hover:bg-black/60 border border-sky-500/20 text-sky-300 hover:text-white transition-all shrink-0"
+            title="Hide Topbar"
+          >
+            <ChevronUp size={16} />
+          </button>
         </div>
       </header>
       )}
