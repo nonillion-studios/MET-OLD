@@ -11,11 +11,6 @@ import { detectPage, detectPageViaGradio, resolveBubblePolygon, DetectorDetectio
 import { translateUltraModePage, UltraRegionResult } from './lib/ultraTranslate';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
 import { mapRawRegionToPixels } from './utils/textUtils';
-import { UploadReviewModal } from './components/UploadReviewModal';
-import { PageTextsModal } from './components/PageTextsModal';
-import { ProcessPagesModal } from './components/ProcessPagesModal';
-import { TranslationDocsModal } from './components/TranslationDocsModal';
-import { UltraDetectionPreviewModal } from './components/UltraDetectionPreviewModal';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -32,7 +27,18 @@ const isEmptyBubbleText = (text: string | undefined | null): boolean => {
   return /^[.?!؟…\s]+$/.test(trimmed);
 };
 
+// Lazy-loaded: each of these is only ever rendered behind a `show*` flag once the user
+// opens it, so bundling them into the main chunk just delays first paint for code most
+// sessions never touch. All five get one shared Suspense boundary at their render site
+// (a bare `null` fallback - the modal itself supplies the loading UI once it's ready, and
+// the gap is normally imperceptible since these chunks are small and prefetched on hover
+// of their trigger buttons in most browsers).
 const ImageEditor = React.lazy(() => import('./components/ImageEditor').then(m => ({ default: m.ImageEditor })));
+const UploadReviewModal = React.lazy(() => import('./components/UploadReviewModal').then(m => ({ default: m.UploadReviewModal })));
+const PageTextsModal = React.lazy(() => import('./components/PageTextsModal').then(m => ({ default: m.PageTextsModal })));
+const ProcessPagesModal = React.lazy(() => import('./components/ProcessPagesModal').then(m => ({ default: m.ProcessPagesModal })));
+const TranslationDocsModal = React.lazy(() => import('./components/TranslationDocsModal').then(m => ({ default: m.TranslationDocsModal })));
+const UltraDetectionPreviewModal = React.lazy(() => import('./components/UltraDetectionPreviewModal').then(m => ({ default: m.UltraDetectionPreviewModal })));
 
 export default function App() {
   const [images, setImages] = useState<ProcessedImage[]>([]);
@@ -1176,29 +1182,46 @@ export default function App() {
         return;
       }
 
+      // Every region's x/y/width/height is stored in the ORIGINAL page's pixel space, and
+      // the studio/export render pipelines draw the swapped-in dataUrl at that same stored
+      // width/height regardless of the cleaned file's actual pixel size (Konva.Image scales
+      // to fit whatever width/height it's given). A cleaned plate whose dimensions don't
+      // match the original would silently stretch/distort and throw every region's
+      // coordinates out of alignment with the art underneath - so mismatched pages are
+      // skipped instead of swapped, and reported to the user rather than failing silently.
+      const skippedDimensionMismatches: string[] = [];
+
       setImages(prev => {
         const newImages = [...prev];
         for (let i = 0; i < cleanedImages.length; i++) {
           const cleanInfo = cleanedImages[i];
           let targetIndex = -1;
-          
+
           if (zipMatchMode === 'filename') {
              targetIndex = newImages.findIndex(img => img.filename === cleanInfo.filename);
              if (targetIndex === -1) targetIndex = i; // fallback to index if names don't match
           } else {
              targetIndex = i;
           }
-          
+
           if (targetIndex < newImages.length) {
              const target = newImages[targetIndex];
+
+             if (target.width !== cleanInfo.width || target.height !== cleanInfo.height) {
+               skippedDimensionMismatches.push(
+                 `${cleanInfo.filename} (cleaned: ${cleanInfo.width}×${cleanInfo.height}, original: ${target.width}×${target.height})`
+               );
+               continue;
+             }
+
              // Save current as original if not already set, then swap dataUrl
              const originalDataUrl = target.originalDataUrl || target.dataUrl;
-             
+
              // Remove backgrounds from regions as the image is already cleaned
              const newRegions = target.regions.map(r => ({ ...r, bgColor: 'transparent' }));
              // Remove all paint strokes, since the user only wants texts over the cleaned image
              const newStrokes: PaintStroke[] = [];
-             
+
              newImages[targetIndex] = {
                ...target,
                originalDataUrl,
@@ -1210,15 +1233,26 @@ export default function App() {
         }
         return newImages;
       });
-      
-      Swal.fire({
-        icon: 'success',
-        title: 'Manga Cleaning Plates Merged!',
-        text: 'Successfully swapped original sheets for whitened plates. Use the "View Original" toggle to inspect any changes.',
-        confirmButtonColor: '#2563eb',
-        background: '#120b24',
-        color: '#f8fafc'
-      });
+
+      if (skippedDimensionMismatches.length > 0) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'Some Cleaned Plates Skipped',
+          html: `${cleanedImages.length - skippedDimensionMismatches.length} of ${cleanedImages.length} plate(s) merged successfully. ${skippedDimensionMismatches.length} were skipped because their dimensions don't match the original page (this would misalign existing text placement):<br/><br/>${skippedDimensionMismatches.map(s => `&bull; ${s}`).join('<br/>')}`,
+          confirmButtonColor: '#eab308',
+          background: '#120b24',
+          color: '#f8fafc'
+        });
+      } else {
+        Swal.fire({
+          icon: 'success',
+          title: 'Manga Cleaning Plates Merged!',
+          text: 'Successfully swapped original sheets for whitened plates. Use the "View Original" toggle to inspect any changes.',
+          confirmButtonColor: '#2563eb',
+          background: '#120b24',
+          color: '#f8fafc'
+        });
+      }
     } catch (error) {
       console.error("Error reading cleaned zip", error);
       Swal.fire({
@@ -4125,6 +4159,9 @@ export default function App() {
         </div>
       )}
 
+      {/* Lazy-loaded modals share one Suspense boundary - each is independently gated by
+          its own `show*`/state flag above, so at most one actually mounts at a time. */}
+      <Suspense fallback={null}>
       {/* Unified Upload + Review modal (replaces Create Project modal and Manage Pages dropdown) */}
       {showManagePages && (
         <UploadReviewModal
@@ -4197,17 +4234,7 @@ export default function App() {
           onAiAutoAssign={handleAiAutoAssignTranslationDoc}
         />
       )}
-
-      {showProcessPagesModal && (
-        <ProcessPagesModal
-          images={images}
-          onClose={() => setShowProcessPagesModal(false)}
-          onStart={(imageIds) => {
-            setShowProcessPagesModal(false);
-            processPagesSequentially(imageIds);
-          }}
-        />
-      )}
+      </Suspense>
 
       {/* Stunning Create Series Modal */}
       {showCreateSeriesModal && (
