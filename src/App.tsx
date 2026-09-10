@@ -2266,8 +2266,8 @@ export default function App() {
         </button>
       )}
       {activeNavigationTab === 'library' && activeChapterId !== null && showTopbar && (
-        <header className="min-h-16 border-b border-sky-500/10 flex flex-wrap items-center justify-between px-3 sm:px-6 py-2 bg-black/40 backdrop-blur-md shrink-0 gap-3">
-          <div className="flex items-center gap-3 sm:gap-6 shrink-0">
+        <header className="min-h-14 border-b border-sky-500/10 flex items-center flex-nowrap px-2 sm:px-6 py-2 bg-black/40 backdrop-blur-md shrink-0 gap-2 overflow-x-auto">
+          <div className="flex items-center gap-2 sm:gap-6 shrink-0">
             <button
               onClick={() => {
                 setActiveChapterId(null);
@@ -2284,8 +2284,8 @@ export default function App() {
             </div>
           </div>
 
-        <div className="flex flex-wrap items-center gap-3 z-10">
-          <div className="relative">
+        <div className="flex items-center flex-nowrap gap-1.5 sm:gap-3 z-10 shrink-0 ml-auto">
+          <div className="flex items-center flex-nowrap gap-1.5 sm:gap-2 shrink-0">
             <input
               type="file"
               accept=".zip"
@@ -2310,21 +2310,21 @@ export default function App() {
             />
             <button
               onClick={() => setShowManagePages(true)}
-              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300"
+              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-2.5 sm:px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300 shrink-0 whitespace-nowrap"
               title="Manage Pages"
             >
               <ImagePlus size={16} /> <span className="hidden sm:inline">Manage Pages</span>
             </button>
             <button
               onClick={() => setShowPageTextsModal(true)}
-              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300"
+              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-2.5 sm:px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300 shrink-0 whitespace-nowrap"
               title="All Texts in Page"
             >
               <TypeIcon size={16} /> <span className="hidden sm:inline">All Texts</span>
             </button>
             <button
               onClick={() => setShowTranslationDocsModal(true)}
-              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300"
+              className="flex items-center gap-2 hover:bg-[#222] bg-[#111] px-2.5 sm:px-3 py-1.5 rounded-md text-sm transition-colors text-slate-300 shrink-0 whitespace-nowrap"
               title="Translation Docs"
             >
               <FileText size={16} /> <span className="hidden sm:inline">Translation Docs</span>
@@ -2334,7 +2334,7 @@ export default function App() {
           <button
             onClick={() => setShowProcessPagesModal(true)}
             disabled={images.length === 0 || processingQueueProgress !== null}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-3 sm:px-4 py-2 rounded-md font-medium text-sm transition-colors"
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed px-3 sm:px-4 py-2 rounded-md font-medium text-sm transition-colors shrink-0 whitespace-nowrap"
           >
             {processingQueueProgress ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
             <span className="hidden sm:inline">
@@ -2344,13 +2344,13 @@ export default function App() {
 
           <button
             onClick={() => setShowOriginal(!showOriginal)}
-            className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-md font-medium text-sm transition-colors border ${showOriginal ? 'bg-amber-600 border-amber-600 text-white' : 'bg-[#111] border-[#444] text-slate-300 hover:bg-[#222]'}`}
+            className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-md font-medium text-sm transition-colors border shrink-0 whitespace-nowrap ${showOriginal ? 'bg-amber-600 border-amber-600 text-white' : 'bg-[#111] border-[#444] text-slate-300 hover:bg-[#222]'}`}
           >
             <span className="sm:hidden">{showOriginal ? 'Original' : 'View'}</span>
             <span className="hidden sm:inline">{showOriginal ? 'Showing Original' : 'View Original'}</span>
           </button>
 
-          <div className="flex bg-emerald-700/50 rounded-md overflow-hidden border border-emerald-600/30">
+          <div className="flex shrink-0 bg-emerald-700/50 rounded-md overflow-hidden border border-emerald-600/30">
             <button
               onClick={handleExportZip}
               disabled={images.length === 0}
