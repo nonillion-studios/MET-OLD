@@ -59,19 +59,51 @@ export interface SplitPlan {
 /**
  * Computes ~3 pieces by locating 2 cut lines near 1/3 and 2/3 of the page height,
  * snapping each to the nearest genuinely blank row found via a window scan.
+ * @deprecated in favor of computeAutoSplitPlan, which generalizes this to however many
+ * pieces a strip actually needs instead of always exactly 3 - kept only because nothing
+ * else references the fixed-3-piece shape directly.
  */
 export function computeSplitPlan(imageData: ImageData, imgWidth: number, imgHeight: number): SplitPlan {
+  return computeAutoSplitPlan(imageData, imgWidth, imgHeight);
+}
+
+// Comics/scanlation tooling generally targets ~2000-3000px chunks for long webtoon strips
+// (tall enough that each piece still reads as a real page, short enough to stay reliable
+// for downstream AI detection/OCR, which tends to degrade on extremely tall images).
+const DEFAULT_TARGET_CHUNK_HEIGHT = 2200;
+const MIN_PIECE_HEIGHT = 600; // avoid a sliver piece when height doesn't divide evenly
+
+/**
+ * Generalizes the old fixed-3-piece split to however many pieces a strip actually needs:
+ * picks (N-1) evenly-spaced ideal cut lines based on targetChunkHeight, then snaps each to
+ * the nearest genuinely blank row nearby (same window-scan heuristic as before) so cuts
+ * still never land inside a bubble/panel/art region. Falls back to the raw ideal line
+ * un-snapped if no window in range is even close to blank (e.g. a strip with no white
+ * gutters at all - better than crashing or merging pieces unexpectedly).
+ */
+export function computeAutoSplitPlan(
+  imageData: ImageData,
+  imgWidth: number,
+  imgHeight: number,
+  targetChunkHeight: number = DEFAULT_TARGET_CHUNK_HEIGHT
+): SplitPlan {
   const data = imageData.data;
-  const searchWindow = Math.max(20, Math.floor(imgHeight * 0.08));
+  const searchWindow = Math.max(20, Math.floor(imgHeight * 0.04));
 
-  const idealY1 = imgHeight / 3;
-  const idealY2 = (imgHeight * 2) / 3;
+  let pieceCount = Math.max(1, Math.round(imgHeight / targetChunkHeight));
+  // Don't produce a sliver final piece - if the last piece would be too short, drop one cut.
+  if (pieceCount > 1 && imgHeight / pieceCount < MIN_PIECE_HEIGHT) pieceCount = Math.max(1, pieceCount - 1);
 
-  const cut1 = findBestCutRow(data, imgWidth, imgHeight, idealY1, searchWindow);
-  let cut2 = findBestCutRow(data, imgWidth, imgHeight, idealY2, searchWindow);
-  if (cut2 <= cut1) cut2 = Math.min(imgHeight - 1, cut1 + 1);
+  const cutRows: number[] = [];
+  for (let i = 1; i < pieceCount; i++) {
+    const idealY = (imgHeight * i) / pieceCount;
+    let cut = findBestCutRow(data, imgWidth, imgHeight, idealY, searchWindow);
+    const prev = cutRows[cutRows.length - 1] ?? 0;
+    if (cut <= prev) cut = Math.min(imgHeight - 1, prev + 1);
+    cutRows.push(cut);
+  }
 
-  return { cutRows: [cut1, cut2], pieceCount: 3 };
+  return { cutRows, pieceCount: cutRows.length + 1 };
 }
 
 /** Returns true if a page's aspect ratio suggests it's an oversized "long strip" page. */

@@ -1,7 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Sparkles, ImagePlus, ChevronUp, ChevronDown, Trash2, Scissors, X, Plus } from 'lucide-react';
+import { Upload, Sparkles, ImagePlus, ChevronUp, ChevronDown, Trash2, Scissors, X, Plus, Wand2 } from 'lucide-react';
 import { ProcessedImage } from '../types';
-import { isLongPage, getImageDataFromDataUrl, computeSplitPlan, splitImageByRows } from '../lib/pageSplit';
+import { isLongPage, getImageDataFromDataUrl, computeAutoSplitPlan, splitImageByRows } from '../lib/pageSplit';
+import { computeDetectionSafeSplitRows } from '../lib/autoSplit';
+import { DetectorDetection } from '../lib/detector';
 
 interface UploadReviewModalProps {
   images: ProcessedImage[];
@@ -15,6 +17,11 @@ interface UploadReviewModalProps {
   moveImageDown: (index: number) => void;
   deleteImage: (id: string, event: React.MouseEvent) => void;
   onClose: () => void;
+  // Runs the configured YOLO detector (lib/detector.ts, same one Ultra Mode uses) over a
+  // full page and returns its raw detections in full-image pixel coordinates. Optional:
+  // when not provided (or when it throws - no detector server configured), the "Auto-Split
+  // (AI Detector)" button falls back to the offline blank-row heuristic instead.
+  detectRegionsForSplit?: (img: ProcessedImage) => Promise<DetectorDetection[]>;
 }
 
 interface SplitEditorProps {
@@ -146,13 +153,15 @@ export function UploadReviewModal({
   moveImageUp,
   moveImageDown,
   deleteImage,
-  onClose
+  onClose,
+  detectRegionsForSplit
 }: UploadReviewModalProps) {
   const [step, setStep] = useState<'upload' | 'review'>(images.length > 0 ? 'review' : 'upload');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editInitialCuts, setEditInitialCuts] = useState<number[]>([]);
   const [computingId, setComputingId] = useState<string | null>(null);
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
+  const [autoSplittingId, setAutoSplittingId] = useState<string | null>(null);
 
   const goToReview = () => setStep('review');
 
@@ -162,7 +171,7 @@ export function UploadReviewModal({
       // Use the auto-detect algorithm purely as a starting suggestion; user can
       // freely add/drag/remove cuts afterward.
       const imageData = await getImageDataFromDataUrl(img.dataUrl, img.width, img.height);
-      const plan = computeSplitPlan(imageData, img.width, img.height);
+      const plan = computeAutoSplitPlan(imageData, img.width, img.height);
       setEditInitialCuts(plan.cutRows);
     } catch (e) {
       console.error('Split suggestion failed, defaulting to midpoint', e);
@@ -208,6 +217,34 @@ export function UploadReviewModal({
   const cancelSplitEditor = (imgId: string) => {
     setEditingId(null);
     setSkippedIds(prev => new Set(prev).add(imgId));
+  };
+
+  // Uses the configured YOLO detector to find cut lines that are guaranteed not to cross
+  // any bubble/text/sfx (see lib/autoSplit.ts) instead of the offline blank-pixel heuristic
+  // openSplitEditor uses - more reliable on strips with colored/textured gutters where
+  // there's no genuinely blank row to snap to. Applies the split immediately rather than
+  // opening the manual editor, since the whole point is skipping manual cutting; falls back
+  // to the blank-row heuristic (and opens the manual editor for review) if no detector is
+  // configured, the call fails, or the strip is packed too densely for any safe gap to exist.
+  const handleAutoSplitWithAI = async (img: ProcessedImage) => {
+    setAutoSplittingId(img.id);
+    try {
+      if (!detectRegionsForSplit) throw new Error('No detector configured');
+      const detections = await detectRegionsForSplit(img);
+      const cutRows = computeDetectionSafeSplitRows(detections, img.height);
+      if (cutRows.length === 0) throw new Error('No safe gaps found between detections');
+      await applySplit(img, cutRows);
+      setSkippedIds(prev => {
+        const next = new Set(prev);
+        next.delete(img.id);
+        return next;
+      });
+    } catch (e) {
+      console.warn('AI auto-split unavailable, falling back to manual split suggestion', e);
+      await openSplitEditor(img);
+    } finally {
+      setAutoSplittingId(null);
+    }
   };
 
   return (
@@ -351,11 +388,19 @@ export function UploadReviewModal({
                           <Scissors size={10} /> Long page detected
                         </span>
                         <button
+                          onClick={() => handleAutoSplitWithAI(img)}
+                          disabled={autoSplittingId === img.id || computingId === img.id}
+                          title="Uses the YOLO detector to find cut lines that never cross a bubble, and applies the split immediately"
+                          className="flex items-center justify-center gap-1 text-[9px] bg-sky-700 hover:bg-sky-600 disabled:opacity-50 text-white rounded py-1"
+                        >
+                          <Wand2 size={10} /> {autoSplittingId === img.id ? 'Detecting…' : 'Auto-Split (AI Detector)'}
+                        </button>
+                        <button
                           onClick={() => openSplitEditor(img)}
-                          disabled={computingId === img.id}
+                          disabled={computingId === img.id || autoSplittingId === img.id}
                           className="text-[9px] bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white rounded py-1"
                         >
-                          {computingId === img.id ? 'Analyzing…' : 'Preview Split'}
+                          {computingId === img.id ? 'Analyzing…' : 'Preview Split (Manual)'}
                         </button>
                         {isSkipped && <span className="text-[9px] text-slate-500">Split skipped</span>}
                       </div>
