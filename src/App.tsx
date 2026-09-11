@@ -1569,6 +1569,19 @@ export default function App() {
     confidence: number;
   }
 
+  // Runs the raw YOLO detector (same server/settings as Ultra Mode) over a full page and
+  // returns its detections unfiltered, in full-image pixel coordinates - used by
+  // UploadReviewModal's "Auto-Split (AI Detector)" to find safe long-strip cut lines
+  // that never cross a bubble/text/sfx (see lib/autoSplit.ts). Unlike
+  // runUltraDetectionPhase below, this skips bubble-geometry resolution and marker
+  // drawing entirely since a split only needs the raw boxes.
+  const handleDetectRegionsForSplit = async (img: ProcessedImage): Promise<DetectorDetection[]> => {
+    const srcBase64 = img.originalDataUrl || img.dataUrl;
+    return detectorType === 'gradio'
+      ? await detectPageViaGradio(srcBase64, detectorEndpoint, ultraModeConfidence)
+      : await detectPage(srcBase64, detectorEndpoint, ultraModeConfidence);
+  };
+
   // Phase 1 of Ultra Mode: runs the YOLO detector, resolves bubble geometry for each
   // detection, and draws the numbered-marker annotated image sent to the AI. Split out
   // from the AI/translation phase so a detection preview can be shown (and re-run with a
@@ -2989,13 +3002,7 @@ export default function App() {
             <div
               key={img.id}
               className={`relative flex flex-col gap-2 p-3 border-b border-[#333]/50 text-left transition-colors cursor-pointer group ${selectedImageId === img.id ? 'bg-[#111]' : 'hover:bg-[#111]/50'}`}
-              onClick={() => {
-                setSelectedImageId(img.id);
-                // On phone/tablet this panel is a full overlay (see showLeftPanel above) -
-                // picking a page should take you straight to it, like a nav drawer closing
-                // after navigation, instead of leaving the canvas still covered.
-                if (typeof window !== 'undefined' && window.innerWidth < 768) setShowLeftPanel(false);
-              }}
+              onClick={() => setSelectedImageId(img.id)}
             >
               <div className="relative aspect-[3/4] w-full bg-black rounded overflow-hidden flex">
                 {img.originalDataUrl && (
@@ -4197,6 +4204,7 @@ export default function App() {
           moveImageDown={moveImageDown}
           deleteImage={deleteImage}
           onClose={() => setShowManagePages(false)}
+          detectRegionsForSplit={handleDetectRegionsForSplit}
         />
       )}
 
