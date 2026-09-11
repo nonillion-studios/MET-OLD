@@ -43,8 +43,16 @@ export function calculateAutoFitFontSize(
 ): number {
   if (!text) return defaultFontSize;
 
+  // Cap growth at roughly the AI's own suggested fontSize (which it derives from the
+  // original lettering's scale on the page) plus a little slack for a translation that
+  // happens to be shorter than the source text - not a flat 100px ceiling. Without this,
+  // a spacious/oversized box lets the binary search below grow translated text far larger
+  // than the artist's original lettering ever was, which reads as jarring even when it
+  // technically "fits" the box. Mirrors the "cap font size to source text height"
+  // technique other manga-translation tools use, adapted to what's available here (no
+  // separate OCR glyph-height measurement, so the AI's own size suggestion is the proxy).
   let minFontSize = 8;
-  let maxFontSize = 100;
+  let maxFontSize = Math.max(minFontSize, Math.min(100, Math.round(defaultFontSize * 1.15)));
   let bestFontSize = defaultFontSize;
 
   // Clean and find the longest word
