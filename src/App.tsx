@@ -157,6 +157,9 @@ export default function App() {
   const [psdFlatten, setPsdFlatten] = useState<boolean>(() => {
     return localStorage.getItem('manga_psd_flatten') === 'true';
   });
+  const [psdEditableText, setPsdEditableText] = useState<boolean>(() => {
+    return localStorage.getItem('manga_psd_editable_text') !== 'false';
+  });
 
   const [customFonts, setCustomFonts] = useState<string[]>([]);
   const [showExternalAIModal, setShowExternalAIModal] = useState(false);
@@ -367,6 +370,11 @@ export default function App() {
   const handleSetPsdFlatten = (val: boolean) => {
     setPsdFlatten(val);
     localStorage.setItem('manga_psd_flatten', String(val));
+  };
+
+  const handleSetPsdEditableText = (val: boolean) => {
+    setPsdEditableText(val);
+    localStorage.setItem('manga_psd_editable_text', String(val));
   };
 
   const compressImageBase64 = async (base64: string, maxDim: number = 1600, quality: number = 0.85): Promise<string> => {
@@ -1087,7 +1095,7 @@ export default function App() {
       for (let i = 0; i < images.length; i++) {
         const img = images[i];
         Swal.update({ html: `Rendering page ${i + 1} of ${images.length}${img.filename ? ` (${img.filename})` : ''}...` });
-        const buffer = await buildPagePsd(img, { tightCrop: psdTightCrop, flatten: psdFlatten });
+        const buffer = await buildPagePsd(img, { tightCrop: psdTightCrop, flatten: psdFlatten, editableText: psdEditableText });
         zip.file(`Page_${String(i + 1).padStart(3, '0')}.psd`, buffer);
       }
 
@@ -4156,6 +4164,19 @@ export default function App() {
                         <span className="flex flex-col">
                           <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Auto Center Bubbles + Kashida After Processing</span>
                           <span className="text-[10px] text-slate-500 mt-0.5">Automatically runs bubble-centering and Arabic kashida justification once the AI finishes a page.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={psdEditableText}
+                          onChange={(e) => handleSetPsdEditableText(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">PSD: Editable Text Layers</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Writes real, editable Photoshop text layers (not just baked-in images). Requires the same fonts installed in Photoshop to render identically; ignored when "Flatten to Single Layer" is on.</span>
                         </span>
                       </label>
 
