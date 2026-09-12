@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { buildTypesettingPrompt } from "./prompt";
 import { AIProvider } from "../types";
+import { buildOpenAICompatibleChatRequest, parseOpenAICompatibleResponse } from "./openaiCompatible";
 
 // Ultra Mode's simplified per-region translation result: no geometry, just the
 // numbered marker index (matching the number drawn on the annotated image) plus
@@ -47,6 +48,9 @@ interface UltraTranslateOptions {
   customApiKey?: string;
   ollamaEndpoint?: string;
   ollamaModel?: string;
+  openaiCompatBaseUrl?: string;
+  openaiCompatApiKey?: string;
+  openaiCompatModel?: string;
   customInstructions?: string;
   generalGuidance?: string;
   translateJapanese?: boolean;
@@ -107,6 +111,47 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
     } catch (error) {
       console.error("Ultra Mode: failed to parse Ollama JSON response", text);
       throw new Error("Ultra Mode: failed to parse AI response from Ollama");
+    }
+  }
+
+  if (opts.provider === 'openai_compatible') {
+    if (!opts.openaiCompatBaseUrl) throw new Error("Base URL is required");
+    if (!opts.openaiCompatApiKey) throw new Error("API key is required");
+    if (!opts.openaiCompatModel) throw new Error("Model name is required");
+
+    const schemaInstructions = `
+IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry:
+[
+  { "region": number, "originalText": string, "translatedText": string, "fontFamily": string (optional, sfx regions only) },
+  { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
+]`;
+
+    const request = buildOpenAICompatibleChatRequest(
+      opts.openaiCompatBaseUrl,
+      opts.openaiCompatApiKey,
+      opts.openaiCompatModel,
+      prompt + schemaInstructions,
+      rawBase64,
+      opts.mimeType
+    );
+
+    const response = await fetch(request.url, {
+      method: "POST",
+      headers: request.headers,
+      body: JSON.stringify(request.body),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`Ultra Mode: OpenAI-compatible request failed (${response.status}): ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    try {
+      return parseOpenAICompatibleResponse(data) as unknown as UltraRegionResult[];
+    } catch (error) {
+      console.error("Ultra Mode: failed to parse OpenAI-compatible JSON response", data);
+      throw new Error("Ultra Mode: failed to parse AI response from OpenAI-compatible endpoint");
     }
   }
 

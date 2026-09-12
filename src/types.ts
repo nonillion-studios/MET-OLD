@@ -1,6 +1,6 @@
 import { DetectorDetection } from './lib/detector';
 
-export type AIProvider = 'gemini' | 'ollama';
+export type AIProvider = 'gemini' | 'ollama' | 'openai_compatible';
 
 export interface Region {
   id: string;

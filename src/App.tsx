@@ -5,6 +5,7 @@ import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingle
 import { buildPagePsd } from './lib/psdExport';
 import { processMangaPages, assignParagraphsToPages, RawRegion } from './lib/gemini';
 import { processMangaPagesOllama } from './lib/ollama';
+import { processMangaPagesOpenAICompatible } from './lib/openaiCompatible';
 import { buildTypesettingPrompt, PageHint } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
 import { detectPage, detectPageViaGradio, resolveBubblePolygon, DetectorDetection } from './lib/detector';
@@ -118,7 +119,11 @@ export default function App() {
   const [aiProvider, setAiProvider] = useState<AIProvider>('gemini');
   const [ollamaEndpoint, setOllamaEndpoint] = useState('http://localhost:11434');
   const [ollamaModel, setOllamaModel] = useState('');
+  const [openaiCompatBaseUrl, setOpenaiCompatBaseUrl] = useState('');
+  const [openaiCompatApiKey, setOpenaiCompatApiKey] = useState('');
+  const [openaiCompatModel, setOpenaiCompatModel] = useState('');
   const [geminiDisplayName, setGeminiDisplayName] = useState('Gemini 2.5 Flash');
+  const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash');
   const [ultraModeEnabled, setUltraModeEnabled] = useState<boolean>(() => {
     return localStorage.getItem('manga_ultra_mode_enabled') === 'true';
   });
@@ -156,6 +161,9 @@ export default function App() {
   });
   const [psdFlatten, setPsdFlatten] = useState<boolean>(() => {
     return localStorage.getItem('manga_psd_flatten') === 'true';
+  });
+  const [psdEditableText, setPsdEditableText] = useState<boolean>(() => {
+    return localStorage.getItem('manga_psd_editable_text') !== 'false';
   });
 
   const [customFonts, setCustomFonts] = useState<string[]>([]);
@@ -210,8 +218,16 @@ export default function App() {
     if (savedOllamaEndpoint) setOllamaEndpoint(savedOllamaEndpoint);
     const savedOllamaModel = localStorage.getItem('manga_ollama_model');
     if (savedOllamaModel) setOllamaModel(savedOllamaModel);
+    const savedOpenaiCompatBaseUrl = localStorage.getItem('manga_openai_compat_base_url');
+    if (savedOpenaiCompatBaseUrl) setOpenaiCompatBaseUrl(savedOpenaiCompatBaseUrl);
+    const savedOpenaiCompatApiKey = localStorage.getItem('manga_openai_compat_api_key');
+    if (savedOpenaiCompatApiKey) setOpenaiCompatApiKey(savedOpenaiCompatApiKey);
+    const savedOpenaiCompatModel = localStorage.getItem('manga_openai_compat_model');
+    if (savedOpenaiCompatModel) setOpenaiCompatModel(savedOpenaiCompatModel);
     const savedGeminiDisplayName = localStorage.getItem('manga_gemini_display_name');
     if (savedGeminiDisplayName) setGeminiDisplayName(savedGeminiDisplayName);
+    const savedGeminiModel = localStorage.getItem('manga_gemini_model');
+    if (savedGeminiModel) setGeminiModel(savedGeminiModel);
     const savedDetectorEndpoint = localStorage.getItem('manga_detector_endpoint');
     if (savedDetectorEndpoint) setDetectorEndpoint(savedDetectorEndpoint);
 
@@ -284,10 +300,34 @@ export default function App() {
     localStorage.setItem('manga_ollama_model', val);
   };
 
+  const handleOpenaiCompatBaseUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOpenaiCompatBaseUrl(val);
+    localStorage.setItem('manga_openai_compat_base_url', val);
+  };
+
+  const handleOpenaiCompatApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOpenaiCompatApiKey(val);
+    localStorage.setItem('manga_openai_compat_api_key', val);
+  };
+
+  const handleOpenaiCompatModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOpenaiCompatModel(val);
+    localStorage.setItem('manga_openai_compat_model', val);
+  };
+
   const handleGeminiDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setGeminiDisplayName(val);
     localStorage.setItem('manga_gemini_display_name', val);
+  };
+
+  const handleGeminiModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setGeminiModel(val);
+    localStorage.setItem('manga_gemini_model', val);
   };
 
   const handleSetUltraModeEnabled = (val: boolean) => {
@@ -316,6 +356,12 @@ export default function App() {
     localStorage.setItem('manga_ultra_mode_auto_accept', String(val));
   };
 
+  const aiProviderStatusLabel = (): string => {
+    if (aiProvider === 'ollama') return 'Translating (Ollama)...';
+    if (aiProvider === 'openai_compatible') return 'Translating (OpenAI-compatible)...';
+    return 'Translating (Gemini)...';
+  };
+
   const translateWithProvider = async (
     pages: { id: string, base64Image: string, mimeType: string }[],
     geminiKey?: string,
@@ -333,6 +379,19 @@ export default function App() {
         pageHints
       );
     }
+    if (aiProvider === 'openai_compatible') {
+      return processMangaPagesOpenAICompatible(
+        pages,
+        openaiCompatBaseUrl,
+        openaiCompatApiKey,
+        openaiCompatModel,
+        customInstructions,
+        generalTranslationGuidance,
+        translateJapanese,
+        translateSfx,
+        pageHints
+      );
+    }
     return processMangaPages(
       pages,
       geminiKey,
@@ -340,7 +399,8 @@ export default function App() {
       translateJapanese,
       translateSfx,
       generalTranslationGuidance,
-      pageHints
+      pageHints,
+      geminiModel
     );
   };
 
@@ -367,6 +427,11 @@ export default function App() {
   const handleSetPsdFlatten = (val: boolean) => {
     setPsdFlatten(val);
     localStorage.setItem('manga_psd_flatten', String(val));
+  };
+
+  const handleSetPsdEditableText = (val: boolean) => {
+    setPsdEditableText(val);
+    localStorage.setItem('manga_psd_editable_text', String(val));
   };
 
   const compressImageBase64 = async (base64: string, maxDim: number = 1600, quality: number = 0.85): Promise<string> => {
@@ -510,6 +575,11 @@ export default function App() {
 
       saveHistory(img.id);
 
+      // Mirrors how the in-app path builds a Region from the AI's RawRegion JSON (see
+      // processImage) - this used to ignore almost every field the prompt actually asks
+      // the AI to return (angle, colors, font, alignment, line height...) and substitute
+      // generic hardcoded defaults instead, silently discarding most of what an external
+      // AI's response actually contained.
       const newRegions: Region[] = parsed.map(raw => {
         const isNormalized = (raw.xmax <= 1000 && raw.ymax <= 1000 && raw.xmax > 1);
         const { x, y, width, height } = isNormalized
@@ -530,17 +600,17 @@ export default function App() {
           y,
           width,
           height,
-          angle: 0,
-          textColor: '#000000',
-          strokeColor: 'transparent',
-          strokeWidth: 0,
-          bgColor: '#ffffff',
-          fontFamily: 'Cairo',
-          fontSize: Math.max(16, Math.floor(height / 4)),
-          fontWeight: 'bold',
-          fontStyle: 'normal',
-          textAlign: 'center',
-          lineHeight: 1.3,
+          angle: raw.angle || 0,
+          textColor: raw.textColor || '#000000',
+          strokeColor: raw.strokeColor || 'transparent',
+          strokeWidth: raw.strokeWidth ?? 0,
+          bgColor: raw.bgColor && raw.bgColor !== 'transparent' ? raw.bgColor : (raw.type === 'sfx' ? 'transparent' : '#ffffff'),
+          fontFamily: raw.fontFamily || (raw.type === 'sfx' ? 'Aref Ruqaa' : 'Marhey'),
+          fontSize: raw.fontSize || Math.max(16, Math.floor(height / 4)),
+          fontWeight: raw.fontWeight || 'normal',
+          fontStyle: raw.fontStyle || 'normal',
+          textAlign: (raw.textAlign as Region['textAlign']) || 'center',
+          lineHeight: raw.lineHeight || 1.3,
           autoFitText: true
         };
       });
@@ -767,6 +837,14 @@ export default function App() {
 
     const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
     const extendableArabicLetters = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
+    // لا (lam-alef) is a MANDATORY ligature in Arabic - the two letters must always render
+    // connected with no elongation between them. Inserting a kashida there (ل + ـ + ا)
+    // breaks the ligature into two visually disconnected letters, which is not just ugly
+    // but orthographically wrong - lam is technically "extendable" on its own, but never
+    // when directly followed by any alef form.
+    const alefForms = /[اأإآٱ]/;
+    const canInsertKashidaAfter = (word: string, charIdx: number) =>
+      extendableArabicLetters.test(word[charIdx]) && !(word[charIdx] === 'ل' && alefForms.test(word[charIdx + 1] || ''));
 
     const measureNode = new Konva.Text({
       fontFamily: region.fontFamily,
@@ -833,7 +911,7 @@ export default function App() {
           if (insertCounts[w] >= MAX_PER_WORD) continue;
           const word = words[w];
           for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
-            if (extendableArabicLetters.test(word[charIdx])) {
+            if (canInsertKashidaAfter(word, charIdx)) {
               words[w] = word.slice(0, charIdx + 1) + 'ـــ' + word.slice(charIdx + 1);
               insertCounts[w]++;
               insertedThisPass = true;
@@ -956,6 +1034,14 @@ export default function App() {
     if (style === 'oval') {
       const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
       const extendableArabicLetters = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
+    // لا (lam-alef) is a MANDATORY ligature in Arabic - the two letters must always render
+    // connected with no elongation between them. Inserting a kashida there (ل + ـ + ا)
+    // breaks the ligature into two visually disconnected letters, which is not just ugly
+    // but orthographically wrong - lam is technically "extendable" on its own, but never
+    // when directly followed by any alef form.
+    const alefForms = /[اأإآٱ]/;
+    const canInsertKashidaAfter = (word: string, charIdx: number) =>
+      extendableArabicLetters.test(word[charIdx]) && !(word[charIdx] === 'ل' && alefForms.test(word[charIdx + 1] || ''));
 
       // Throwaway single-line measurement node (no width constraint) to greedily pack
       // words into visual lines the same way calculateAutoFitFontSize measures text.
@@ -1024,7 +1110,7 @@ export default function App() {
             if (insertCounts[w] >= MAX_PER_WORD) continue;
             const word = words[w];
             for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
-              if (extendableArabicLetters.test(word[charIdx])) {
+              if (canInsertKashidaAfter(word, charIdx)) {
                 // Never insert a tatweel between ل (lam) and a following alef-family
                 // letter (ا/أ/إ/آ) — لا/لأ/لإ/لآ are mandatory ligatures in Arabic.
                 if (word[charIdx] === 'ل' && /[اأإآ]/.test(word[charIdx + 1])) continue;
@@ -1087,7 +1173,7 @@ export default function App() {
       for (let i = 0; i < images.length; i++) {
         const img = images[i];
         Swal.update({ html: `Rendering page ${i + 1} of ${images.length}${img.filename ? ` (${img.filename})` : ''}...` });
-        const buffer = await buildPagePsd(img, { tightCrop: psdTightCrop, flatten: psdFlatten });
+        const buffer = await buildPagePsd(img, { tightCrop: psdTightCrop, flatten: psdFlatten, editableText: psdEditableText });
         zip.file(`Page_${String(i + 1).padStart(3, '0')}.psd`, buffer);
       }
 
@@ -1668,7 +1754,7 @@ export default function App() {
 
     const singleHintText = buildSplitContextHint(img, imagesRef.current);
 
-    setProcessingStatusLog(aiProvider === 'ollama' ? 'Translating (Ollama)...' : 'Translating (Gemini)...');
+    setProcessingStatusLog(aiProviderStatusLabel());
     const aiResults: UltraRegionResult[] = await translateUltraModePage({
       provider: aiProvider,
       base64Image: annotatedDataUrl,
@@ -1676,6 +1762,9 @@ export default function App() {
       customApiKey: geminiKey,
       ollamaEndpoint,
       ollamaModel,
+      openaiCompatBaseUrl,
+      openaiCompatApiKey,
+      openaiCompatModel,
       customInstructions,
       generalGuidance: [generalTranslationGuidance, singleHintText].filter(Boolean).join('\n') || undefined,
       translateJapanese,
@@ -1844,7 +1933,7 @@ export default function App() {
         return;
       }
 
-      setProcessingStatusLog(aiProvider === 'ollama' ? 'Translating (Ollama)...' : 'Translating (Gemini)...');
+      setProcessingStatusLog(aiProviderStatusLabel());
       const results = await translateWithProvider([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key, singlePageHints);
       const rawRegions = (results[0]?.regions || []).filter(raw => !isEmptyBubbleText(raw.originalText));
 
@@ -3903,20 +3992,36 @@ export default function App() {
                     >
                       <option value="gemini">Gemini</option>
                       <option value="ollama">Ollama (local)</option>
+                      <option value="openai_compatible">OpenAI-Compatible (Ollama Cloud, OpenRouter, Groq, etc.)</option>
                     </select>
 
                     {aiProvider === 'gemini' ? (
-                      <div className="space-y-2">
-                        <label className="text-[11px] text-slate-400 font-mono">Display Name (cosmetic only)</label>
-                        <input
-                          type="text"
-                          value={geminiDisplayName}
-                          onChange={handleGeminiDisplayNameChange}
-                          placeholder="Gemini 2.5 Flash"
-                          className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
-                        />
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Model ID (sent to the API)</label>
+                          <input
+                            type="text"
+                            value={geminiModel}
+                            onChange={handleGeminiModelChange}
+                            placeholder="gemini-2.5-flash"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                          <p className="text-[10px] text-slate-500 font-mono leading-relaxed">
+                            Any valid Gemini model id (e.g. gemini-3-flash once available) - changing this switches which model actually runs translation, unlike the display name below.
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Display Name (cosmetic only)</label>
+                          <input
+                            type="text"
+                            value={geminiDisplayName}
+                            onChange={handleGeminiDisplayNameChange}
+                            placeholder="Gemini 2.5 Flash"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
                       </div>
-                    ) : (
+                    ) : aiProvider === 'ollama' ? (
                       <div className="space-y-3">
                         <div className="space-y-2">
                           <label className="text-[11px] text-slate-400 font-mono">Ollama Endpoint URL</label>
@@ -3938,6 +4043,64 @@ export default function App() {
                             className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
                           />
                         </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Quick Fill (fills Base URL only)</label>
+                          <select
+                            defaultValue=""
+                            onChange={(e) => {
+                              if (!e.target.value) return;
+                              const val = e.target.value;
+                              setOpenaiCompatBaseUrl(val);
+                              localStorage.setItem('manga_openai_compat_base_url', val);
+                              e.target.value = "";
+                            }}
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 outline-none"
+                          >
+                            <option value="">Select a preset...</option>
+                            <option value="https://ollama.com/v1">Ollama Cloud</option>
+                            <option value="https://openrouter.ai/api/v1">OpenRouter</option>
+                            <option value="https://api.groq.com/openai/v1">Groq</option>
+                            <option value="https://api.together.xyz/v1">Together AI</option>
+                            <option value="https://api.deepseek.com/v1">DeepSeek</option>
+                            <option value="https://api.x.ai/v1">xAI (Grok)</option>
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Base URL</label>
+                          <input
+                            type="text"
+                            value={openaiCompatBaseUrl}
+                            onChange={handleOpenaiCompatBaseUrlChange}
+                            placeholder="https://api.groq.com/openai/v1"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">API Key</label>
+                          <input
+                            type="password"
+                            value={openaiCompatApiKey}
+                            onChange={handleOpenaiCompatApiKeyChange}
+                            placeholder="sk-..."
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Model Name</label>
+                          <input
+                            type="text"
+                            value={openaiCompatModel}
+                            onChange={handleOpenaiCompatModelChange}
+                            placeholder="e.g. llama-3.2-90b-vision-preview, qwen2.5vl"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-mono leading-relaxed">
+                          Works with any host implementing the OpenAI Chat Completions API (POST {"{baseUrl}"}/chat/completions with a Bearer API key) - the model you pick must support image/vision input, since this app sends page images for translation.
+                        </p>
                       </div>
                     )}
                   </div>
@@ -4146,6 +4309,19 @@ export default function App() {
                         <span className="flex flex-col">
                           <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Auto Center Bubbles + Kashida After Processing</span>
                           <span className="text-[10px] text-slate-500 mt-0.5">Automatically runs bubble-centering and Arabic kashida justification once the AI finishes a page.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={psdEditableText}
+                          onChange={(e) => handleSetPsdEditableText(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">PSD: Editable Text Layers</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Writes real, editable Photoshop text layers (not just baked-in images). Requires the same fonts installed in Photoshop to render identically; ignored when "Flatten to Single Layer" is on.</span>
                         </span>
                       </label>
 
@@ -4388,10 +4564,29 @@ export default function App() {
       )}
 
       {/* Stunning External AI Prompt & Paste Modal */}
-      {showExternalAIModal && (
+      {showExternalAIModal && (() => {
+        // Mirrors exactly what the in-app Gemini path sends for a single page (see the
+        // singlePageHints construction in processImage): same buildSplitContextHint
+        // (Translation Docs hint + split-part continuity note), same prompt builder. This
+        // used to omit pageHints entirely, silently dropping any Translation Docs
+        // reference text the user had set up for this page when they copy-pasted into an
+        // external AI instead of using an in-app key.
+        const hintText = selectedImage ? buildSplitContextHint(selectedImage, images) : undefined;
+        const pageHints: PageHint[] | undefined = hintText && hintText.trim().length > 0
+          ? [{ pageIndex: 0, hint: hintText }]
+          : undefined;
+        const externalAICocktailPrompt = buildTypesettingPrompt({
+          pageCount: 1,
+          customInstructions,
+          generalGuidance: generalTranslationGuidance,
+          translateJapanese,
+          translateSfx,
+          pageHints,
+        });
+        return (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in text-left" dir="ltr">
           <div className="liquid-glass p-8 rounded-3xl max-w-2xl w-full mx-4 shadow-[0_20px_50px_rgba(56, 189, 248,0.35)] border border-sky-500/25 relative text-slate-200 flex flex-col gap-6 max-h-[90vh] overflow-y-auto">
-            <button 
+            <button
               onClick={() => setShowExternalAIModal(false)}
               className="absolute top-4 left-4 text-slate-400 hover:text-white p-2 rounded-full hover:bg-white/5 transition-all text-sm font-bold"
             >
@@ -4420,25 +4615,13 @@ export default function App() {
                 <div className="relative">
                   <textarea
                     readOnly
-                    value={buildTypesettingPrompt({
-                      pageCount: 1,
-                      customInstructions,
-                      generalGuidance: generalTranslationGuidance,
-                      translateJapanese,
-                      translateSfx,
-                    })}
+                    value={externalAICocktailPrompt}
                     className="w-full h-28 bg-black/60 border border-[#444] rounded-xl p-3 text-xs text-slate-350 font-mono resize-none text-left"
                     dir="ltr"
                   />
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(buildTypesettingPrompt({
-                        pageCount: 1,
-                        customInstructions,
-                        generalGuidance: generalTranslationGuidance,
-                        translateJapanese,
-                        translateSfx,
-                      }));
+                      navigator.clipboard.writeText(externalAICocktailPrompt);
                       Swal.fire({
                         icon: 'success',
                         title: 'Cocktail prompt copied!',
@@ -4491,7 +4674,8 @@ export default function App() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
