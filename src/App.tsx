@@ -520,6 +520,11 @@ export default function App() {
 
       saveHistory(img.id);
 
+      // Mirrors how the in-app path builds a Region from the AI's RawRegion JSON (see
+      // processImage) - this used to ignore almost every field the prompt actually asks
+      // the AI to return (angle, colors, font, alignment, line height...) and substitute
+      // generic hardcoded defaults instead, silently discarding most of what an external
+      // AI's response actually contained.
       const newRegions: Region[] = parsed.map(raw => {
         const isNormalized = (raw.xmax <= 1000 && raw.ymax <= 1000 && raw.xmax > 1);
         const { x, y, width, height } = isNormalized
@@ -540,17 +545,17 @@ export default function App() {
           y,
           width,
           height,
-          angle: 0,
-          textColor: '#000000',
-          strokeColor: 'transparent',
-          strokeWidth: 0,
-          bgColor: '#ffffff',
-          fontFamily: 'Cairo',
-          fontSize: Math.max(16, Math.floor(height / 4)),
-          fontWeight: 'bold',
-          fontStyle: 'normal',
-          textAlign: 'center',
-          lineHeight: 1.3,
+          angle: raw.angle || 0,
+          textColor: raw.textColor || '#000000',
+          strokeColor: raw.strokeColor || 'transparent',
+          strokeWidth: raw.strokeWidth ?? 0,
+          bgColor: raw.bgColor && raw.bgColor !== 'transparent' ? raw.bgColor : (raw.type === 'sfx' ? 'transparent' : '#ffffff'),
+          fontFamily: raw.fontFamily || (raw.type === 'sfx' ? 'Aref Ruqaa' : 'Marhey'),
+          fontSize: raw.fontSize || Math.max(16, Math.floor(height / 4)),
+          fontWeight: raw.fontWeight || 'normal',
+          fontStyle: raw.fontStyle || 'normal',
+          textAlign: (raw.textAlign as Region['textAlign']) || 'center',
+          lineHeight: raw.lineHeight || 1.3,
           autoFitText: true
         };
       });
@@ -4429,10 +4434,29 @@ export default function App() {
       )}
 
       {/* Stunning External AI Prompt & Paste Modal */}
-      {showExternalAIModal && (
+      {showExternalAIModal && (() => {
+        // Mirrors exactly what the in-app Gemini path sends for a single page (see the
+        // singlePageHints construction in processImage): same buildSplitContextHint
+        // (Translation Docs hint + split-part continuity note), same prompt builder. This
+        // used to omit pageHints entirely, silently dropping any Translation Docs
+        // reference text the user had set up for this page when they copy-pasted into an
+        // external AI instead of using an in-app key.
+        const hintText = selectedImage ? buildSplitContextHint(selectedImage, images) : undefined;
+        const pageHints: PageHint[] | undefined = hintText && hintText.trim().length > 0
+          ? [{ pageIndex: 0, hint: hintText }]
+          : undefined;
+        const externalAICocktailPrompt = buildTypesettingPrompt({
+          pageCount: 1,
+          customInstructions,
+          generalGuidance: generalTranslationGuidance,
+          translateJapanese,
+          translateSfx,
+          pageHints,
+        });
+        return (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/95 backdrop-blur-md animate-fade-in text-left" dir="ltr">
           <div className="liquid-glass p-8 rounded-3xl max-w-2xl w-full mx-4 shadow-[0_20px_50px_rgba(56, 189, 248,0.35)] border border-sky-500/25 relative text-slate-200 flex flex-col gap-6 max-h-[90vh] overflow-y-auto">
-            <button 
+            <button
               onClick={() => setShowExternalAIModal(false)}
               className="absolute top-4 left-4 text-slate-400 hover:text-white p-2 rounded-full hover:bg-white/5 transition-all text-sm font-bold"
             >
@@ -4461,25 +4485,13 @@ export default function App() {
                 <div className="relative">
                   <textarea
                     readOnly
-                    value={buildTypesettingPrompt({
-                      pageCount: 1,
-                      customInstructions,
-                      generalGuidance: generalTranslationGuidance,
-                      translateJapanese,
-                      translateSfx,
-                    })}
+                    value={externalAICocktailPrompt}
                     className="w-full h-28 bg-black/60 border border-[#444] rounded-xl p-3 text-xs text-slate-350 font-mono resize-none text-left"
                     dir="ltr"
                   />
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(buildTypesettingPrompt({
-                        pageCount: 1,
-                        customInstructions,
-                        generalGuidance: generalTranslationGuidance,
-                        translateJapanese,
-                        translateSfx,
-                      }));
+                      navigator.clipboard.writeText(externalAICocktailPrompt);
                       Swal.fire({
                         icon: 'success',
                         title: 'Cocktail prompt copied!',
@@ -4532,7 +4544,8 @@ export default function App() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
