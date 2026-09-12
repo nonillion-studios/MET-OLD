@@ -22,7 +22,14 @@
     border: 1px solid rgba(56, 189, 248, 0.25);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255,255,255,0.05);
   }
-  .glass-noise {
+  /* :where() zeroes this selector's specificity so it NEVER competes with a real
+     positioning utility class (fixed/static/absolute/md:static/...) regardless of which
+     one happens to come later in the compiled CSS - only applies when nothing else on the
+     element sets position. Plain `.glass-noise { position: relative }` used to fight
+     Tailwind's positioning utilities at equal specificity, which needed an `!important`
+     workaround wherever it lost (see App.tsx history) - that workaround then broke the
+     *other* breakpoint's positioning by winning unconditionally. This is the actual fix. */
+  :where(.glass-noise) {
     position: relative;
   }
   .glass-noise::before {
