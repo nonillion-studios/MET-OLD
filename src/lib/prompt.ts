@@ -39,7 +39,7 @@ ${!translateSfx ? "4. IGNORE any numbered region that is purely a sound effect (
     - textColor: hex color code.
     - strokeColor: hex color code for the text outline (critical for SFX or hiding original text).
     - strokeWidth: outline thickness (e.g. 0 to 10).
-    - fontFamily: choose exactly from: "Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas", "Almarai" (e.g. Marhey/Katibeh/Changa/Lemonada for informal conversation bubbles, Aref Ruqaa/Lalezar/Rakkas/Katibeh for SFX or angry shouts, Cairo/Almarai/Tajawal for formal narration or thoughts). VARY THE FONTS ACROSS DIFFERENT REGIONS DEPENDING ON THE TONE AND CONTEXT.
+    - fontFamily: "Marhey" is the DEFAULT for ordinary speech/thought bubble dialogue — use it unless there is a CLEAR, STRONG reason not to (this covers the large majority of normal calm conversation; do not use a decorative/expressive font just for the sake of variety). Only deviate from Marhey when the text itself demands it: "Aref Ruqaa"/"Lalezar"/"Rakkas"/"Katibeh" ONLY for genuine SFX or text that is visibly SHOUTED (ALL CAPS, exclamation-heavy, or drawn large/jagged in the source art), "Cairo"/"Almarai"/"Tajawal" ONLY for clearly formal narration/caption boxes (not regular dialogue). The full allowed list is: "Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas", "Almarai" - but when in doubt, use Marhey.
     - fontWeight: 'normal', 'bold', '800', etc.
     - fontStyle: 'normal' or 'italic'.
     - textAlign: 'center', 'right', 'left' (mostly center for bubbles).
@@ -69,7 +69,7 @@ For each page, detect all speech bubbles, narrative text, and sound effects (SFX
     - textColor: hex color code.
     - strokeColor: hex color code for the text outline (critical for SFX or hiding original text).
     - strokeWidth: outline thickness (e.g. 0 to 10).
-    - fontFamily: choose exactly from: "Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas", "Almarai". (e.g. Marhey/Katibeh/Changa/Lemonada for informal conversation bubbles, Aref Ruqaa/Lalezar/Rakkas for SFX or angry shouts, Cairo/Almarai/Tajawal for formal narration or thoughts). VARY THE FONTS ACROSS DIFFERENT BUBBLES DEPENDING ON THE TONE AND CONTEXT.(marahy by def for bubbles only (try to make fonts units))
+    - fontFamily: "Marhey" is the DEFAULT for ordinary speech/thought bubble dialogue — use it unless there is a CLEAR, STRONG reason not to (this covers the large majority of normal calm conversation; do not use a decorative/expressive font just for the sake of variety). Only deviate from Marhey when the text itself demands it: "Aref Ruqaa"/"Lalezar"/"Rakkas"/"Katibeh" ONLY for genuine SFX or text that is visibly SHOUTED (ALL CAPS, exclamation-heavy, or drawn large/jagged in the source art), "Cairo"/"Almarai"/"Tajawal" ONLY for clearly formal narration/caption boxes (not regular dialogue). The full allowed list is: "Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas", "Almarai" - but when in doubt, use Marhey.
     - fontSize: suggest a base size (e.g. 24-72).
     - fontWeight: 'normal', 'bold', '800', etc (bold by def).
     - fontStyle: 'normal' or 'italic'.
