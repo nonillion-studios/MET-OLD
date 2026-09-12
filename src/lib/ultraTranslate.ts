@@ -138,7 +138,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
     const schemaInstructions = `
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry:
 [
-  { "region": number, "originalText": string, "translatedText": string, "fontFamily": string (optional, sfx regions only) },
+  { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
   { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
 ]`;
 
