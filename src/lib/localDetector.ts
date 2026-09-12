@@ -1,4 +1,5 @@
 import * as ort from 'onnxruntime-web';
+import { get, set } from 'idb-keyval';
 import { DetectorDetection, DetectorPoint } from './detector';
 import { traceContour } from './bubbleDetect';
 
@@ -12,22 +13,49 @@ import { traceContour } from './bubbleDetect';
 // interior being flood-fillable (works even for textured/non-white bubble fills).
 
 const MODEL_URL = '/models/manga-detector.onnx';
+// Bump this if manga-detector.onnx is ever replaced with a retrained/updated version -
+// changes the IndexedDB key so a stale cached model can never shadow a newer one shipped
+// in a later app update.
+const MODEL_VERSION = 'v1';
+const MODEL_CACHE_KEY = `manga_detector_onnx_${MODEL_VERSION}`;
 const INPUT_SIZE = 640;
 const PROTO_SIZE = 160; // output1's spatial size; INPUT_SIZE / PROTO_SIZE = 4x downsample
 const CLASS_NAMES: DetectorDetection['class_name'][] = ['panel', 'bubble', 'text', 'sfx'];
 
 ort.env.wasm.wasmPaths = '/ort/';
 
+// Explicitly persists the model's bytes in IndexedDB rather than relying on the browser's
+// default HTTP cache: HTTP cache entries are heuristic and can be evicted under storage
+// pressure with no app-level control, while an IndexedDB entry this app wrote itself stays
+// until the user clears site data - so after the very first successful load, the model
+// never needs a network round-trip again, even offline.
+async function loadModelBytes(): Promise<ArrayBuffer> {
+  const cached = await get<ArrayBuffer>(MODEL_CACHE_KEY).catch(() => undefined);
+  if (cached) return cached;
+
+  const response = await fetch(MODEL_URL);
+  if (!response.ok) throw new Error(`Failed to download local detector model (HTTP ${response.status})`);
+  const buffer = await response.arrayBuffer();
+  await set(MODEL_CACHE_KEY, buffer).catch(err => {
+    // Storage quota exceeded or IndexedDB unavailable (private browsing in some browsers) -
+    // not fatal, just means this session re-downloads next time instead of persisting.
+    console.warn('Could not persist local detector model to IndexedDB, will re-fetch next time', err);
+  });
+  return buffer;
+}
+
 let sessionPromise: Promise<ort.InferenceSession> | null = null;
 function getSession(): Promise<ort.InferenceSession> {
   if (!sessionPromise) {
-    sessionPromise = ort.InferenceSession.create(MODEL_URL, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all',
-    }).catch(err => {
-      sessionPromise = null; // allow retrying on next call instead of caching a permanent failure
-      throw err;
-    });
+    sessionPromise = loadModelBytes()
+      .then(buffer => ort.InferenceSession.create(new Uint8Array(buffer), {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'all',
+      }))
+      .catch(err => {
+        sessionPromise = null; // allow retrying on next call instead of caching a permanent failure
+        throw err;
+      });
   }
   return sessionPromise;
 }
