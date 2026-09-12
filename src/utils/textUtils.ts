@@ -31,6 +31,29 @@ export function wrapRtlLines(text: string): string {
   return text.split('\n').map(line => '⁧' + line + '⁩').join('\n');
 }
 
+// Reference size for comparing words' rendered widths - large enough that per-glyph
+// rounding differences between words don't flip which one is actually widest, and since
+// all words in the same font scale together, the widest-at-this-size word stays the
+// widest at whatever font size the caller actually renders at.
+const WORD_WIDTH_COMPARISON_FONT_SIZE = 100;
+
+function findWidestWord(words: string[], fontFamily: string, fontStyle: string, letterSpacing: number): string {
+  if (words.length === 0) return '';
+  const measureNode = new Konva.Text({ fontFamily, fontStyle, letterSpacing, fontSize: WORD_WIDTH_COMPARISON_FONT_SIZE });
+  let widest = words[0];
+  let widestWidth = -1;
+  for (const word of words) {
+    measureNode.text(word);
+    const w = measureNode.width();
+    if (w > widestWidth) {
+      widestWidth = w;
+      widest = word;
+    }
+  }
+  measureNode.destroy();
+  return widest;
+}
+
 export function calculateAutoFitFontSize(
   text: string,
   width: number,
@@ -55,9 +78,16 @@ export function calculateAutoFitFontSize(
   let maxFontSize = Math.max(minFontSize, Math.min(100, Math.round(defaultFontSize * 1.15)));
   let bestFontSize = defaultFontSize;
 
-  // Clean and find the longest word
-  const words = text.split(/\s+/);
-  const longestWord = words.reduce((a, b) => a.length > b.length ? a : b, '');
+  // Find the word that's actually WIDEST when rendered, not just the one with the most
+  // characters - character count is a poor proxy for pixel width in Arabic, where letter
+  // widths vary a lot (compare a word full of ه/م/ع to one full of ا/ل/ي at the same
+  // length) and joining/ligature shapes shift width further. Picking by length could miss
+  // the real widest word entirely, under-measuring how much room is actually needed and
+  // letting Konva's word-wrap fall back to breaking mid-word when that word turns out not
+  // to fit after all (its own overflow fallback - "word" wrap still splits a single word
+  // that doesn't fit alone, it doesn't just let it overflow).
+  const words = text.split(/\s+/).filter(Boolean);
+  const longestWord = findWidestWord(words, fontFamily, fontStyle, letterSpacing);
 
   const measureNode = new Konva.Text({
     text: longestWord,
@@ -169,7 +199,7 @@ export function calculateAutoFitBox(
   if (!text) return { renderWidth: regionWidth, renderHeight: regionHeight, xOffset: 0, yOffset: 0 };
 
   const words = text.split(/\s+/).filter(Boolean);
-  const longestWord = words.reduce((a, b) => (b.length > a.length ? b : a), '');
+  const longestWord = findWidestWord(words, fontFamily, fontStyle, letterSpacing);
   const measureNode = new Konva.Text({ text: longestWord, fontFamily, fontStyle, fontSize, letterSpacing });
   const longestWordWidth = measureNode.width();
   measureNode.destroy();
