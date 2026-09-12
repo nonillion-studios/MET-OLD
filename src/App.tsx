@@ -119,6 +119,7 @@ export default function App() {
   const [ollamaEndpoint, setOllamaEndpoint] = useState('http://localhost:11434');
   const [ollamaModel, setOllamaModel] = useState('');
   const [geminiDisplayName, setGeminiDisplayName] = useState('Gemini 2.5 Flash');
+  const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash');
   const [ultraModeEnabled, setUltraModeEnabled] = useState<boolean>(() => {
     return localStorage.getItem('manga_ultra_mode_enabled') === 'true';
   });
@@ -212,6 +213,8 @@ export default function App() {
     if (savedOllamaModel) setOllamaModel(savedOllamaModel);
     const savedGeminiDisplayName = localStorage.getItem('manga_gemini_display_name');
     if (savedGeminiDisplayName) setGeminiDisplayName(savedGeminiDisplayName);
+    const savedGeminiModel = localStorage.getItem('manga_gemini_model');
+    if (savedGeminiModel) setGeminiModel(savedGeminiModel);
     const savedDetectorEndpoint = localStorage.getItem('manga_detector_endpoint');
     if (savedDetectorEndpoint) setDetectorEndpoint(savedDetectorEndpoint);
 
@@ -290,6 +293,12 @@ export default function App() {
     localStorage.setItem('manga_gemini_display_name', val);
   };
 
+  const handleGeminiModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setGeminiModel(val);
+    localStorage.setItem('manga_gemini_model', val);
+  };
+
   const handleSetUltraModeEnabled = (val: boolean) => {
     setUltraModeEnabled(val);
     localStorage.setItem('manga_ultra_mode_enabled', String(val));
@@ -340,7 +349,8 @@ export default function App() {
       translateJapanese,
       translateSfx,
       generalTranslationGuidance,
-      pageHints
+      pageHints,
+      geminiModel
     );
   };
 
@@ -767,6 +777,14 @@ export default function App() {
 
     const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
     const extendableArabicLetters = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
+    // لا (lam-alef) is a MANDATORY ligature in Arabic - the two letters must always render
+    // connected with no elongation between them. Inserting a kashida there (ل + ـ + ا)
+    // breaks the ligature into two visually disconnected letters, which is not just ugly
+    // but orthographically wrong - lam is technically "extendable" on its own, but never
+    // when directly followed by any alef form.
+    const alefForms = /[اأإآٱ]/;
+    const canInsertKashidaAfter = (word: string, charIdx: number) =>
+      extendableArabicLetters.test(word[charIdx]) && !(word[charIdx] === 'ل' && alefForms.test(word[charIdx + 1] || ''));
 
     const measureNode = new Konva.Text({
       fontFamily: region.fontFamily,
@@ -833,7 +851,7 @@ export default function App() {
           if (insertCounts[w] >= MAX_PER_WORD) continue;
           const word = words[w];
           for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
-            if (extendableArabicLetters.test(word[charIdx])) {
+            if (canInsertKashidaAfter(word, charIdx)) {
               words[w] = word.slice(0, charIdx + 1) + 'ـــ' + word.slice(charIdx + 1);
               insertCounts[w]++;
               insertedThisPass = true;
@@ -956,6 +974,14 @@ export default function App() {
     if (style === 'oval') {
       const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
       const extendableArabicLetters = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
+    // لا (lam-alef) is a MANDATORY ligature in Arabic - the two letters must always render
+    // connected with no elongation between them. Inserting a kashida there (ل + ـ + ا)
+    // breaks the ligature into two visually disconnected letters, which is not just ugly
+    // but orthographically wrong - lam is technically "extendable" on its own, but never
+    // when directly followed by any alef form.
+    const alefForms = /[اأإآٱ]/;
+    const canInsertKashidaAfter = (word: string, charIdx: number) =>
+      extendableArabicLetters.test(word[charIdx]) && !(word[charIdx] === 'ل' && alefForms.test(word[charIdx + 1] || ''));
 
       // Throwaway single-line measurement node (no width constraint) to greedily pack
       // words into visual lines the same way calculateAutoFitFontSize measures text.
@@ -1024,7 +1050,7 @@ export default function App() {
             if (insertCounts[w] >= MAX_PER_WORD) continue;
             const word = words[w];
             for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
-              if (extendableArabicLetters.test(word[charIdx])) {
+              if (canInsertKashidaAfter(word, charIdx)) {
                 // Never insert a tatweel between ل (lam) and a following alef-family
                 // letter (ا/أ/إ/آ) — لا/لأ/لإ/لآ are mandatory ligatures in Arabic.
                 if (word[charIdx] === 'ل' && /[اأإآ]/.test(word[charIdx + 1])) continue;
@@ -3906,15 +3932,30 @@ export default function App() {
                     </select>
 
                     {aiProvider === 'gemini' ? (
-                      <div className="space-y-2">
-                        <label className="text-[11px] text-slate-400 font-mono">Display Name (cosmetic only)</label>
-                        <input
-                          type="text"
-                          value={geminiDisplayName}
-                          onChange={handleGeminiDisplayNameChange}
-                          placeholder="Gemini 2.5 Flash"
-                          className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
-                        />
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Model ID (sent to the API)</label>
+                          <input
+                            type="text"
+                            value={geminiModel}
+                            onChange={handleGeminiModelChange}
+                            placeholder="gemini-2.5-flash"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                          <p className="text-[10px] text-slate-500 font-mono leading-relaxed">
+                            Any valid Gemini model id (e.g. gemini-3-flash once available) - changing this switches which model actually runs translation, unlike the display name below.
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Display Name (cosmetic only)</label>
+                          <input
+                            type="text"
+                            value={geminiDisplayName}
+                            onChange={handleGeminiDisplayNameChange}
+                            placeholder="Gemini 2.5 Flash"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-3">

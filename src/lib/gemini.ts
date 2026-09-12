@@ -2,6 +2,32 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Region } from "../types";
 import { buildTypesettingPrompt, PageHint } from "./prompt";
 
+// Gemini periodically returns transient errors under load - most commonly HTTP 503
+// ("model overloaded") and 429 (rate limited) - that usually succeed on a retry a few
+// seconds later. Without this, one blip fails an entire page-processing batch outright
+// even though the same request would likely work seconds later.
+function isRetryableGeminiError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /\b(503|429|UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|rate.?limit)\b/i.test(message);
+}
+
+async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxAttempts || !isRetryableGeminiError(err)) throw err;
+      // Exponential backoff with jitter: ~1s, 2s, 4s (+/- up to 300ms) before retrying.
+      const delay = 2 ** (attempt - 1) * 1000 + Math.random() * 300;
+      console.warn(`Gemini request failed (attempt ${attempt}/${maxAttempts}, retrying in ${Math.round(delay)}ms):`, err instanceof Error ? err.message : err);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastErr;
+}
+
 export interface RawRegion {
   type: "bubble" | "sfx";
   originalText: string;
@@ -53,7 +79,7 @@ Distribute these paragraphs evenly and logically across the ${pageCount} pages i
 
 Return ONLY a JSON array of ${paragraphs.length} integers (page numbers, 1-based, or -1), one per paragraph, in the exact same order as the numbered paragraphs above.`;
 
-  const response = await ai.models.generateContent({
+  const response = await callGeminiWithRetry(() => ai.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [
       { text: textPrompt },
@@ -67,7 +93,7 @@ Return ONLY a JSON array of ${paragraphs.length} integers (page numbers, 1-based
         items: { type: Type.INTEGER }
       }
     }
-  });
+  }));
 
   const text = response.text;
   if (!text) throw new Error("No text returned from Gemini");
@@ -92,7 +118,7 @@ export async function generateInpaint(base64Image: string, mimeType: string, cus
   }
   const ai = new GoogleGenAI({ apiKey: key });
 
-  const response = await ai.models.generateContent({
+  const response = await callGeminiWithRetry(() => ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: {
       parts: [
@@ -112,7 +138,7 @@ export async function generateInpaint(base64Image: string, mimeType: string, cus
         aspectRatio: '1:1'
       }
     }
-  });
+  }));
 
   for (const part of response.candidates?.[0]?.content?.parts || []) {
     if (part.inlineData) {
@@ -123,7 +149,7 @@ export async function generateInpaint(base64Image: string, mimeType: string, cus
   throw new Error("Failed to generate inpaint image.");
 }
 
-export async function processMangaPages(pages: { id: string, base64Image: string, mimeType: string }[], customApiKey?: string, customInstructions?: string, translateJapanese?: boolean, translateSfx?: boolean, generalGuidance?: string, pageHints?: PageHint[]): Promise<{ id: string, regions: RawRegion[] }[]> {
+export async function processMangaPages(pages: { id: string, base64Image: string, mimeType: string }[], customApiKey?: string, customInstructions?: string, translateJapanese?: boolean, translateSfx?: boolean, generalGuidance?: string, pageHints?: PageHint[], modelName: string = "gemini-2.5-flash"): Promise<{ id: string, regions: RawRegion[] }[]> {
   const key = customApiKey;
   if (!key) {
     throw new Error("API Key is required");
@@ -154,8 +180,8 @@ export async function processMangaPages(pages: { id: string, base64Image: string
     });
   });
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+  const response = await callGeminiWithRetry(() => ai.models.generateContent({
+    model: modelName,
     contents,
     config: {
       responseMimeType: "application/json",
@@ -197,7 +223,7 @@ export async function processMangaPages(pages: { id: string, base64Image: string
         }
       }
     }
-  });
+  }));
 
   const text = response.text;
   if (!text) throw new Error("No text returned from Gemini");
