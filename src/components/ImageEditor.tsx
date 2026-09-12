@@ -88,28 +88,39 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
   ]);
 
   return (
-    <Text
-      text={region.translatedText ? wrapRtlLines(region.translatedText) : ''}
-      x={xOffset}
-      y={yOffset}
-      width={renderWidth}
-      height={renderHeight}
-      fill={region.textColor}
-      stroke={region.strokeColor !== 'transparent' ? region.strokeColor : undefined}
-      strokeWidth={region.strokeColor !== 'transparent' ? region.strokeWidth : 0}
-      fontFamily={region.fontFamily}
-      fontSize={fontSize}
-      fontStyle={fontStyleStr}
-      align={region.textAlign}
-      verticalAlign="middle"
-      lineHeight={region.lineHeight || 1.2}
-      letterSpacing={region.letterSpacing || 0}
-      wrap="word"
-      listening={false}
-      fillAfterStrokeEnabled={true}
-      shadowColor={region.shadowColor !== 'transparent' && !!region.shadowColor ? region.shadowColor : undefined}
-      shadowBlur={region.shadowBlur || 0}
-    />
+    <>
+      {/* Hit area sized to the GROWN box, not the original region.width/height - the
+          parent Group's own hit-Rect only covers the original region bounds, but this
+          box can render larger (see calculateAutoFitBox above) whenever the text didn't
+          fit. Without this, clicking on visibly-rendered-but-grown text silently misses
+          every listener (this Text itself has listening=false) and the click falls
+          through to whatever's behind it instead of selecting the region. Always fully
+          contains the original region bounds (calculateAutoFitBox only ever grows),
+          so this alone is sufficient - no separate region-sized Rect needed. */}
+      <Rect x={xOffset} y={yOffset} width={renderWidth} height={renderHeight} fill="transparent" />
+      <Text
+        text={region.translatedText ? wrapRtlLines(region.translatedText) : ''}
+        x={xOffset}
+        y={yOffset}
+        width={renderWidth}
+        height={renderHeight}
+        fill={region.textColor}
+        stroke={region.strokeColor !== 'transparent' ? region.strokeColor : undefined}
+        strokeWidth={region.strokeColor !== 'transparent' ? region.strokeWidth : 0}
+        fontFamily={region.fontFamily}
+        fontSize={fontSize}
+        fontStyle={fontStyleStr}
+        align={region.textAlign}
+        verticalAlign="middle"
+        lineHeight={region.lineHeight || 1.2}
+        letterSpacing={region.letterSpacing || 0}
+        wrap="word"
+        listening={false}
+        fillAfterStrokeEnabled={true}
+        shadowColor={region.shadowColor !== 'transparent' && !!region.shadowColor ? region.shadowColor : undefined}
+        shadowBlur={region.shadowBlur || 0}
+      />
+    </>
   );
 };
 
@@ -425,7 +436,6 @@ export function ImageEditor({
                       });
                     }}
                   >
-                    <Rect width={region.width} height={region.height} fill="transparent" />
                     <AutoFitText region={region} pageWidth={image.width} pageHeight={image.height} />
                   </Group>
                 ))}
