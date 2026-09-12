@@ -25,7 +25,11 @@ export interface DetailedBubbleResult {
 }
 
 // Moore-Neighbor tracing function to extract pixel-perfect boundary of a visited mask
-function traceContour(visited: Uint8Array, width: number, height: number, startX: number, startY: number): number[] {
+// Exported for reuse by localDetector.ts, which traces the YOLO-seg model's own
+// per-instance binary mask the same way this file traces a flood-filled one - both are
+// "walk the boundary of a Uint8Array region" problems, just with a different source of
+// the binary mask.
+export function traceContour(visited: Uint8Array, width: number, height: number, startX: number, startY: number): number[] {
   // Find leftmost visited pixel in the connected component to start boundary search safely
   let bx = startX;
   let by = startY;

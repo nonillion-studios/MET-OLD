@@ -123,8 +123,8 @@ export default function App() {
     return localStorage.getItem('manga_ultra_mode_enabled') === 'true';
   });
   const [detectorEndpoint, setDetectorEndpoint] = useState('http://localhost:5000');
-  const [detectorType, setDetectorType] = useState<'api' | 'gradio'>(() => {
-    return (localStorage.getItem('manga_detector_type') as 'api' | 'gradio') || 'api';
+  const [detectorType, setDetectorType] = useState<'api' | 'gradio' | 'local'>(() => {
+    return (localStorage.getItem('manga_detector_type') as 'api' | 'gradio' | 'local') || 'api';
   });
   const [ultraModeConfidence, setUltraModeConfidence] = useState<number>(() => {
     const stored = parseFloat(localStorage.getItem('manga_ultra_mode_confidence') || '');
@@ -301,7 +301,7 @@ export default function App() {
     localStorage.setItem('manga_detector_endpoint', val);
   };
 
-  const handleSetDetectorType = (val: 'api' | 'gradio') => {
+  const handleSetDetectorType = (val: 'api' | 'gradio' | 'local') => {
     setDetectorType(val);
     localStorage.setItem('manga_detector_type', val);
   };
@@ -1577,9 +1577,22 @@ export default function App() {
   // drawing entirely since a split only needs the raw boxes.
   const handleDetectRegionsForSplit = async (img: ProcessedImage): Promise<DetectorDetection[]> => {
     const srcBase64 = img.originalDataUrl || img.dataUrl;
-    return detectorType === 'gradio'
-      ? await detectPageViaGradio(srcBase64, detectorEndpoint, ultraModeConfidence)
-      : await detectPage(srcBase64, detectorEndpoint, ultraModeConfidence);
+    return runDetection(srcBase64, ultraModeConfidence);
+  };
+
+  // Dispatches to whichever detector backend is configured: the Flask API, a Gradio
+  // Space, or (see lib/localDetector.ts) the same YOLO model running fully client-side via
+  // onnxruntime-web - no server needed at all for 'local'.
+  const runDetection = async (srcBase64: string, confidence: number): Promise<DetectorDetection[]> => {
+    if (detectorType === 'gradio') return detectPageViaGradio(srcBase64, detectorEndpoint, confidence);
+    if (detectorType === 'local') {
+      // Dynamically imported: onnxruntime-web is a large dependency that should only ever
+      // load for sessions that actually pick "Local (In-Browser)" detection, not bundled
+      // into the main chunk everyone downloads.
+      const { detectPageLocally } = await import('./lib/localDetector');
+      return detectPageLocally(srcBase64, confidence);
+    }
+    return detectPage(srcBase64, detectorEndpoint, confidence);
   };
 
   // Phase 1 of Ultra Mode: runs the YOLO detector, resolves bubble geometry for each
@@ -1590,9 +1603,7 @@ export default function App() {
     const srcBase64 = img.originalDataUrl || img.dataUrl;
 
     setProcessingStatusLog('Detecting regions (YOLO)...');
-    const rawDetections = detectorType === 'gradio'
-      ? await detectPageViaGradio(srcBase64, detectorEndpoint, confidence)
-      : await detectPage(srcBase64, detectorEndpoint, confidence);
+    const rawDetections = await runDetection(srcBase64, confidence);
     const detections = rawDetections.filter(d => d.class_name === 'bubble' || d.class_name === 'text' || d.class_name === 'sfx');
 
     updateImage(img.id, { detectorResult: detections });
@@ -3961,30 +3972,37 @@ export default function App() {
                           <label className="text-[11px] text-slate-400 font-mono">Detector Type</label>
                           <select
                             value={detectorType}
-                            onChange={(e) => handleSetDetectorType(e.target.value as 'api' | 'gradio')}
+                            onChange={(e) => handleSetDetectorType(e.target.value as 'api' | 'gradio' | 'local')}
                             className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
                           >
                             <option value="api">Custom API Server (server/api_server.py)</option>
                             <option value="gradio">Gradio Space (server/gradio_app.py)</option>
+                            <option value="local">Local (In-Browser, No Server)</option>
                           </select>
                         </div>
-                        <div className="space-y-2">
-                          <label className="text-[11px] text-slate-400 font-mono">
-                            {detectorType === 'gradio' ? 'Gradio Space (username/space-name or full URL)' : 'Detector Endpoint URL'}
-                          </label>
-                          <input
-                            type="text"
-                            value={detectorEndpoint}
-                            onChange={handleDetectorEndpointChange}
-                            placeholder={detectorType === 'gradio' ? 'e.g. yourname/manga-ai-detector' : 'http://localhost:5000'}
-                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
-                          />
-                          <p className="text-[10px] text-slate-500 font-mono leading-relaxed">
-                            {detectorType === 'gradio'
-                              ? 'Uses the Gradio client protocol (queue-based), not a plain HTTP call - point this at your HF Space id or self-hosted Gradio URL.'
-                              : 'A plain HTTP endpoint implementing the /api/detect contract.'}
+                        {detectorType === 'local' ? (
+                          <p className="text-[10px] text-slate-500 font-mono leading-relaxed bg-black/30 border border-sky-500/10 rounded-xl p-3">
+                            Runs the YOLO detector directly in your browser via WebAssembly - no server or endpoint needed. The model (~11MB) downloads once and is cached by the browser. Slower than a GPU-backed server, but works fully offline after the first load.
                           </p>
-                        </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <label className="text-[11px] text-slate-400 font-mono">
+                              {detectorType === 'gradio' ? 'Gradio Space (username/space-name or full URL)' : 'Detector Endpoint URL'}
+                            </label>
+                            <input
+                              type="text"
+                              value={detectorEndpoint}
+                              onChange={handleDetectorEndpointChange}
+                              placeholder={detectorType === 'gradio' ? 'e.g. yourname/manga-ai-detector' : 'http://localhost:5000'}
+                              className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                            />
+                            <p className="text-[10px] text-slate-500 font-mono leading-relaxed">
+                              {detectorType === 'gradio'
+                                ? 'Uses the Gradio client protocol (queue-based), not a plain HTTP call - point this at your HF Space id or self-hosted Gradio URL.'
+                                : 'A plain HTTP endpoint implementing the /api/detect contract.'}
+                            </p>
+                          </div>
+                        )}
                         <div className="space-y-2">
                           <label className="text-[11px] text-slate-400 font-mono flex justify-between">
                             <span>Detection Confidence</span>
@@ -4263,6 +4281,7 @@ export default function App() {
           onAiAutoAssign={handleAiAutoAssignTranslationDoc}
         />
       )}
+
       </Suspense>
 
       {/* Stunning Create Series Modal */}
