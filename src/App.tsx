@@ -7,7 +7,7 @@ import { processMangaPages, assignParagraphsToPages, RawRegion } from './lib/gem
 import { processMangaPagesOllama } from './lib/ollama';
 import { buildTypesettingPrompt, PageHint } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
-import { detectPage, detectPageViaGradio, resolveBubblePolygon, DetectorDetection } from './lib/detector';
+import { detectPage, detectPageViaGradio, resolveBubblePolygon, pairBubbleAndTextDetections, DetectorDetection } from './lib/detector';
 import { translateUltraModePage, UltraRegionResult } from './lib/ultraTranslate';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
 import { mapRawRegionToPixels } from './utils/textUtils';
@@ -904,6 +904,19 @@ export default function App() {
   // when the setting is on but centering silently found nothing to do (e.g. the flood fill
   // couldn't find bubble interiors on this page) rather than the page just looking
   // unchanged with no explanation.
+  // Kashida-only piece of the auto-enhance pass: oval-gradient justification, with no
+  // dependency on flood-fill/bubble geometry. Split out so Ultra Mode (which already gets
+  // real detector-derived geometry/centering) can run justification without also running
+  // the redundant bubble-recentering pass below.
+  const applyKashidaToRegions = (regions: Region[]): Region[] => {
+    return regions.map(region => {
+      if (region.type !== 'bubble') return region;
+      const kashidaText = computeOvalKashidaText(region);
+      if (kashidaText === null) return region;
+      return { ...region, translatedText: kashidaText, textAlign: 'center' as const };
+    });
+  };
+
   const autoEnhanceRegionsForImage = async (
     imgDataUrl: string,
     regions: Region[]
@@ -911,12 +924,7 @@ export default function App() {
     const { newRegions, changed } = await computeBubbleFillForRegions(imgDataUrl, regions);
     const bubbleCount = regions.filter(r => r.type === 'bubble').length;
     const centeredCount = changed ? newRegions.filter(r => r.type === 'bubble' && r.bubbleContour).length : 0;
-    const finalRegions = newRegions.map(region => {
-      if (region.type !== 'bubble') return region;
-      const kashidaText = computeOvalKashidaText(region);
-      if (kashidaText === null) return region;
-      return { ...region, translatedText: kashidaText, textAlign: 'center' as const };
-    });
+    const finalRegions = applyKashidaToRegions(newRegions);
     return { regions: finalRegions, bubbleCount, centeredCount };
   };
 
@@ -1628,9 +1636,14 @@ export default function App() {
     ctx.drawImage(imageObj, 0, 0);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-    const slots: UltraSlot[] = detections.map(detection => ({
-      detection,
-      geometry: resolveBubblePolygon(detection, imageData),
+    // Pair each 'bubble' detection with the 'text' detection sitting inside it (if any) so
+    // the bubble's geometry sizes the region while the text's geometry centers it - fixes
+    // two touching/connected bubbles where the bubble-shape centroid alone can land in the
+    // wrong place. A paired 'text' detection is consumed and does not get its own slot.
+    const pairedDetections = pairBubbleAndTextDetections(detections);
+    const slots: UltraSlot[] = pairedDetections.map(pair => ({
+      detection: pair.primary,
+      geometry: resolveBubblePolygon(pair.primary, imageData, pair.centerFrom),
     }));
 
     // Draw numbered markers (1-indexed) near each resolved region (or bbox center as
@@ -1685,8 +1698,18 @@ export default function App() {
     // Post-filter: drop any returned region whose original text is empty/punctuation-only.
     const filteredResults = aiResults.filter(r => !isEmptyBubbleText(r.originalText));
 
-    const numberedResults = filteredResults.filter((r): r is UltraRegionResult & { region: number } => !r.extra);
+    const numberedResults = filteredResults.filter((r): r is UltraRegionResult & { region: number } => !r.extra && !(r as any).skip);
     const extraResults = filteredResults.filter((r): r is UltraRegionResult & { extra: true } => !!r.extra);
+
+    // Which numbered markers (1-indexed, matching `slots`) the AI never accounted for at
+    // all, either by omitting the number entirely or by returning it with "skip": true -
+    // both mean the AI looked at that marker and decided it isn't real text (a likely YOLO
+    // false positive). Surfaced to the user below rather than silently dropped.
+    const respondedNumbers = new Set<number>();
+    aiResults.forEach(r => {
+      if (!r.extra && !(r as any).skip) respondedNumbers.add((r as UltraRegionResult & { region: number }).region);
+    });
+    const skippedSlotCount = slots.reduce((count, _slot, idx) => respondedNumbers.has(idx + 1) ? count : count + 1, 0);
 
     const newRegions: Region[] = numberedResults
       .map(result => {
@@ -1696,6 +1719,11 @@ export default function App() {
         const bounds = geometry.safeTextBounds;
         const isSfx = detection.class_name === 'sfx';
         const regionType: Region['type'] = isSfx ? 'sfx' : 'bubble';
+        // The YOLO detector only ever supplies position/size (`bounds`, from `geometry`) -
+        // every other typesetting decision (font, weight, style, color, stroke, rotation,
+        // alignment, line height) comes from the AI's own judgment, exactly like the normal
+        // (non-Ultra) pipeline, for ALL numbered regions - not just ones the detector
+        // happened to label 'sfx'.
         const region: Region = {
           id: Math.random().toString(36).substr(2, 9),
           type: regionType,
@@ -1705,17 +1733,17 @@ export default function App() {
           y: bounds.y,
           width: bounds.width,
           height: bounds.height,
-          angle: 0,
-          textColor: '#000000',
-          strokeColor: 'transparent',
-          strokeWidth: 0,
+          angle: result.angle || 0,
+          textColor: result.textColor || '#000000',
+          strokeColor: result.strokeColor || 'transparent',
+          strokeWidth: result.strokeWidth ?? 0,
           bgColor: img.originalDataUrl ? 'transparent' : (regionType === 'bubble' ? '#ffffff' : 'transparent'),
-          fontFamily: isSfx ? (result.fontFamily || 'Aref Ruqaa') : 'Marhey',
+          fontFamily: result.fontFamily || (isSfx ? 'Aref Ruqaa' : 'Marhey'),
           fontSize: Math.max(18, Math.floor(bounds.height / 3)),
-          fontWeight: 'normal',
-          fontStyle: 'normal',
-          textAlign: 'center',
-          lineHeight: 1.2,
+          fontWeight: result.fontWeight || 'normal',
+          fontStyle: result.fontStyle || 'normal',
+          textAlign: (result.textAlign as Region['textAlign']) || 'center',
+          lineHeight: result.lineHeight || 1.2,
           letterSpacing: 0,
           opacity: 1,
           shadowBlur: 0,
@@ -1763,14 +1791,29 @@ export default function App() {
       return region;
     });
 
+    // Ultra Mode regions already get their geometry (position + size) directly from the
+    // YOLO detector, so the flood-fill bubble-recentering pass is redundant at best and can
+    // actively fight the correct YOLO-derived placement (especially the bubble/text-pairing
+    // centering above) at worst. Only kashida justification still applies here; the normal
+    // (non-Ultra) pipeline still runs both (see processImage below).
     let finalRegions = [...newRegions, ...extraRegions];
     if (autoEnhanceAfterProcess) {
-      setProcessingStatusLog(`Centering bubbles on ${img.filename}...`);
-      // Use the whitened/inpainted dataUrl (not the original source-language image) so the
-      // source text doesn't block the flood fill the same way the manual bubble-fill does.
-      const enhanceResult = await autoEnhanceRegionsForImage(img.dataUrl, finalRegions);
-      finalRegions = enhanceResult.regions;
-      notifyAutoCenterFailureIfNeeded(img.filename, enhanceResult.bubbleCount, enhanceResult.centeredCount);
+      setProcessingStatusLog(`Applying kashida justification on ${img.filename}...`);
+      finalRegions = applyKashidaToRegions(finalRegions);
+    }
+
+    if (skippedSlotCount > 0) {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'info',
+        title: 'Some detections skipped',
+        text: `${img.filename}: ${skippedSlotCount} detected region(s) were skipped - the AI didn't find real text there.`,
+        showConfirmButton: false,
+        timer: 3500,
+        background: '#120b24',
+        color: '#f8fafc'
+      });
     }
 
     setProcessingStatusLog(null);
