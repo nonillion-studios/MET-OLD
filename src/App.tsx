@@ -5,6 +5,7 @@ import { extractImagesFromZip, downloadProcessedZip, downloadPdf, downloadSingle
 import { buildPagePsd } from './lib/psdExport';
 import { processMangaPages, assignParagraphsToPages, RawRegion } from './lib/gemini';
 import { processMangaPagesOllama } from './lib/ollama';
+import { processMangaPagesOpenAICompatible } from './lib/openaiCompatible';
 import { buildTypesettingPrompt, PageHint } from './lib/prompt';
 import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
 import { detectPage, detectPageViaGradio, resolveBubblePolygon, DetectorDetection } from './lib/detector';
@@ -118,6 +119,9 @@ export default function App() {
   const [aiProvider, setAiProvider] = useState<AIProvider>('gemini');
   const [ollamaEndpoint, setOllamaEndpoint] = useState('http://localhost:11434');
   const [ollamaModel, setOllamaModel] = useState('');
+  const [openaiCompatBaseUrl, setOpenaiCompatBaseUrl] = useState('');
+  const [openaiCompatApiKey, setOpenaiCompatApiKey] = useState('');
+  const [openaiCompatModel, setOpenaiCompatModel] = useState('');
   const [geminiDisplayName, setGeminiDisplayName] = useState('Gemini 2.5 Flash');
   const [ultraModeEnabled, setUltraModeEnabled] = useState<boolean>(() => {
     return localStorage.getItem('manga_ultra_mode_enabled') === 'true';
@@ -210,6 +214,12 @@ export default function App() {
     if (savedOllamaEndpoint) setOllamaEndpoint(savedOllamaEndpoint);
     const savedOllamaModel = localStorage.getItem('manga_ollama_model');
     if (savedOllamaModel) setOllamaModel(savedOllamaModel);
+    const savedOpenaiCompatBaseUrl = localStorage.getItem('manga_openai_compat_base_url');
+    if (savedOpenaiCompatBaseUrl) setOpenaiCompatBaseUrl(savedOpenaiCompatBaseUrl);
+    const savedOpenaiCompatApiKey = localStorage.getItem('manga_openai_compat_api_key');
+    if (savedOpenaiCompatApiKey) setOpenaiCompatApiKey(savedOpenaiCompatApiKey);
+    const savedOpenaiCompatModel = localStorage.getItem('manga_openai_compat_model');
+    if (savedOpenaiCompatModel) setOpenaiCompatModel(savedOpenaiCompatModel);
     const savedGeminiDisplayName = localStorage.getItem('manga_gemini_display_name');
     if (savedGeminiDisplayName) setGeminiDisplayName(savedGeminiDisplayName);
     const savedDetectorEndpoint = localStorage.getItem('manga_detector_endpoint');
@@ -284,6 +294,24 @@ export default function App() {
     localStorage.setItem('manga_ollama_model', val);
   };
 
+  const handleOpenaiCompatBaseUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOpenaiCompatBaseUrl(val);
+    localStorage.setItem('manga_openai_compat_base_url', val);
+  };
+
+  const handleOpenaiCompatApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOpenaiCompatApiKey(val);
+    localStorage.setItem('manga_openai_compat_api_key', val);
+  };
+
+  const handleOpenaiCompatModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setOpenaiCompatModel(val);
+    localStorage.setItem('manga_openai_compat_model', val);
+  };
+
   const handleGeminiDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setGeminiDisplayName(val);
@@ -316,6 +344,12 @@ export default function App() {
     localStorage.setItem('manga_ultra_mode_auto_accept', String(val));
   };
 
+  const aiProviderStatusLabel = (): string => {
+    if (aiProvider === 'ollama') return 'Translating (Ollama)...';
+    if (aiProvider === 'openai_compatible') return 'Translating (OpenAI-compatible)...';
+    return 'Translating (Gemini)...';
+  };
+
   const translateWithProvider = async (
     pages: { id: string, base64Image: string, mimeType: string }[],
     geminiKey?: string,
@@ -326,6 +360,19 @@ export default function App() {
         pages,
         ollamaEndpoint,
         ollamaModel,
+        customInstructions,
+        generalTranslationGuidance,
+        translateJapanese,
+        translateSfx,
+        pageHints
+      );
+    }
+    if (aiProvider === 'openai_compatible') {
+      return processMangaPagesOpenAICompatible(
+        pages,
+        openaiCompatBaseUrl,
+        openaiCompatApiKey,
+        openaiCompatModel,
         customInstructions,
         generalTranslationGuidance,
         translateJapanese,
@@ -1668,7 +1715,7 @@ export default function App() {
 
     const singleHintText = buildSplitContextHint(img, imagesRef.current);
 
-    setProcessingStatusLog(aiProvider === 'ollama' ? 'Translating (Ollama)...' : 'Translating (Gemini)...');
+    setProcessingStatusLog(aiProviderStatusLabel());
     const aiResults: UltraRegionResult[] = await translateUltraModePage({
       provider: aiProvider,
       base64Image: annotatedDataUrl,
@@ -1676,6 +1723,9 @@ export default function App() {
       customApiKey: geminiKey,
       ollamaEndpoint,
       ollamaModel,
+      openaiCompatBaseUrl,
+      openaiCompatApiKey,
+      openaiCompatModel,
       customInstructions,
       generalGuidance: [generalTranslationGuidance, singleHintText].filter(Boolean).join('\n') || undefined,
       translateJapanese,
@@ -1844,7 +1894,7 @@ export default function App() {
         return;
       }
 
-      setProcessingStatusLog(aiProvider === 'ollama' ? 'Translating (Ollama)...' : 'Translating (Gemini)...');
+      setProcessingStatusLog(aiProviderStatusLabel());
       const results = await translateWithProvider([{ id: img.id, base64Image: imgBase64, mimeType: mimeType }], key, singlePageHints);
       const rawRegions = (results[0]?.regions || []).filter(raw => !isEmptyBubbleText(raw.originalText));
 
@@ -3913,6 +3963,7 @@ export default function App() {
                     >
                       <option value="gemini">Gemini</option>
                       <option value="ollama">Ollama (local)</option>
+                      <option value="openai_compatible">OpenAI-Compatible (Ollama Cloud, OpenRouter, Groq, etc.)</option>
                     </select>
 
                     {aiProvider === 'gemini' ? (
@@ -3926,7 +3977,7 @@ export default function App() {
                           className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
                         />
                       </div>
-                    ) : (
+                    ) : aiProvider === 'ollama' ? (
                       <div className="space-y-3">
                         <div className="space-y-2">
                           <label className="text-[11px] text-slate-400 font-mono">Ollama Endpoint URL</label>
@@ -3948,6 +3999,64 @@ export default function App() {
                             className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
                           />
                         </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Quick Fill (fills Base URL only)</label>
+                          <select
+                            defaultValue=""
+                            onChange={(e) => {
+                              if (!e.target.value) return;
+                              const val = e.target.value;
+                              setOpenaiCompatBaseUrl(val);
+                              localStorage.setItem('manga_openai_compat_base_url', val);
+                              e.target.value = "";
+                            }}
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-xs text-slate-300 focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 outline-none"
+                          >
+                            <option value="">Select a preset...</option>
+                            <option value="https://ollama.com/v1">Ollama Cloud</option>
+                            <option value="https://openrouter.ai/api/v1">OpenRouter</option>
+                            <option value="https://api.groq.com/openai/v1">Groq</option>
+                            <option value="https://api.together.xyz/v1">Together AI</option>
+                            <option value="https://api.deepseek.com/v1">DeepSeek</option>
+                            <option value="https://api.x.ai/v1">xAI (Grok)</option>
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Base URL</label>
+                          <input
+                            type="text"
+                            value={openaiCompatBaseUrl}
+                            onChange={handleOpenaiCompatBaseUrlChange}
+                            placeholder="https://api.groq.com/openai/v1"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">API Key</label>
+                          <input
+                            type="password"
+                            value={openaiCompatApiKey}
+                            onChange={handleOpenaiCompatApiKeyChange}
+                            placeholder="sk-..."
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[11px] text-slate-400 font-mono">Model Name</label>
+                          <input
+                            type="text"
+                            value={openaiCompatModel}
+                            onChange={handleOpenaiCompatModelChange}
+                            placeholder="e.g. llama-3.2-90b-vision-preview, qwen2.5vl"
+                            className="w-full bg-black/60 border border-sky-500/15 rounded-xl p-2.5 text-sm outline-none focus:border-sky-500 text-slate-200 font-mono focus:ring-1 focus:ring-sky-500/20"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-mono leading-relaxed">
+                          Works with any host implementing the OpenAI Chat Completions API (POST {"{baseUrl}"}/chat/completions with a Bearer API key) - the model you pick must support image/vision input, since this app sends page images for translation.
+                        </p>
                       </div>
                     )}
                   </div>
