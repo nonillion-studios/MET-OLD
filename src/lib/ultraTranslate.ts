@@ -12,9 +12,22 @@ export interface UltraNumberedRegionResult {
   region: number;
   originalText: string;
   translatedText: string;
-  // Optional stylistic font suggestion from the AI, applicable only to sfx-type
-  // numbered regions (bubble/text regions always use Marhey regardless).
+  // The detector only supplies position/size for numbered regions - every other
+  // typesetting decision (font, weight, style, color, stroke, rotation, alignment, line
+  // height) is the AI's own judgment, for every numbered region, exactly like the normal
+  // (non-Ultra) detection mode. All optional since older prompts/parses may omit them.
+  angle?: number;
+  textColor?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
   fontFamily?: string;
+  fontWeight?: string;
+  fontStyle?: string;
+  textAlign?: string;
+  lineHeight?: number;
+  // Set (or the "region" number simply omitted) when the AI decides a numbered marker is a
+  // likely detector false positive - no real text/dialogue there - instead of inventing text.
+  skip?: boolean;
   extra?: false;
 }
 
@@ -79,7 +92,7 @@ export async function translateUltraModePage(opts: UltraTranslateOptions): Promi
     const schemaInstructions = `
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry:
 [
-  { "region": number, "originalText": string, "translatedText": string, "fontFamily": string (optional, sfx regions only) },
+  { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
   { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
 ]`;
 
@@ -185,6 +198,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
                   region: { type: Type.INTEGER },
                   originalText: { type: Type.STRING },
                   translatedText: { type: Type.STRING },
+                  skip: { type: Type.BOOLEAN },
                   fontFamily: { type: Type.STRING },
                   // "extra" (detector-missed) entries: geometry + typesetting fields.
                   // All optional here since Gemini's structured schema doesn't support
