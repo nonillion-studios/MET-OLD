@@ -11,7 +11,7 @@ function isRetryableGeminiError(err: unknown): boolean {
   return /\b(503|429|UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|rate.?limit)\b/i.test(message);
 }
 
-async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
+export async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {

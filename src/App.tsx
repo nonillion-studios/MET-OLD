@@ -1760,6 +1760,7 @@ export default function App() {
       base64Image: annotatedDataUrl,
       mimeType: img.mimeType.startsWith('image/png') ? 'image/png' : 'image/jpeg',
       customApiKey: geminiKey,
+      geminiModel,
       ollamaEndpoint,
       ollamaModel,
       openaiCompatBaseUrl,

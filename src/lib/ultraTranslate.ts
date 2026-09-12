@@ -2,6 +2,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { buildTypesettingPrompt } from "./prompt";
 import { AIProvider } from "../types";
 import { buildOpenAICompatibleChatRequest, parseOpenAICompatibleResponse } from "./openaiCompatible";
+import { fetchOllama } from "./ollama";
+import { callGeminiWithRetry } from "./gemini";
 
 // Ultra Mode's simplified per-region translation result: no geometry, just the
 // numbered marker index (matching the number drawn on the annotated image) plus
@@ -46,6 +48,7 @@ interface UltraTranslateOptions {
   base64Image: string; // annotated image with numbered markers, data URL or raw base64
   mimeType: string;
   customApiKey?: string;
+  geminiModel?: string;
   ollamaEndpoint?: string;
   ollamaModel?: string;
   openaiCompatBaseUrl?: string;
@@ -80,7 +83,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
   { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
 ]`;
 
-    const response = await fetch(`${opts.ollamaEndpoint.replace(/\/$/, "")}/api/generate`, {
+    const response = await fetchOllama(`${opts.ollamaEndpoint.replace(/\/$/, "")}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -159,8 +162,8 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
   if (!opts.customApiKey) throw new Error("API Key is required");
   const ai = new GoogleGenAI({ apiKey: opts.customApiKey });
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+  const response = await callGeminiWithRetry(() => ai.models.generateContent({
+    model: opts.geminiModel || "gemini-2.5-flash",
     contents: [
       { text: prompt },
       { inlineData: { data: rawBase64, mimeType: opts.mimeType } },
@@ -209,7 +212,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
         },
       },
     },
-  });
+  }));
 
   const text = response.text;
   if (!text) throw new Error("Ultra Mode: no text returned from Gemini");
