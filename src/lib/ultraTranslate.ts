@@ -2,6 +2,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { buildTypesettingPrompt } from "./prompt";
 import { AIProvider } from "../types";
 import { buildOpenAICompatibleChatRequest, parseOpenAICompatibleResponse } from "./openaiCompatible";
+import { fetchOllama } from "./ollama";
+import { callGeminiWithRetry } from "./gemini";
 
 // Ultra Mode's simplified per-region translation result: no geometry, just the
 // numbered marker index (matching the number drawn on the annotated image) plus
@@ -10,9 +12,22 @@ export interface UltraNumberedRegionResult {
   region: number;
   originalText: string;
   translatedText: string;
-  // Optional stylistic font suggestion from the AI, applicable only to sfx-type
-  // numbered regions (bubble/text regions always use Marhey regardless).
+  // The detector only supplies position/size for numbered regions - every other
+  // typesetting decision (font, weight, style, color, stroke, rotation, alignment, line
+  // height) is the AI's own judgment, for every numbered region, exactly like the normal
+  // (non-Ultra) detection mode. All optional since older prompts/parses may omit them.
+  angle?: number;
+  textColor?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
   fontFamily?: string;
+  fontWeight?: string;
+  fontStyle?: string;
+  textAlign?: string;
+  lineHeight?: number;
+  // Set (or the "region" number simply omitted) when the AI decides a numbered marker is a
+  // likely detector false positive - no real text/dialogue there - instead of inventing text.
+  skip?: boolean;
   extra?: false;
 }
 
@@ -46,6 +61,7 @@ interface UltraTranslateOptions {
   base64Image: string; // annotated image with numbered markers, data URL or raw base64
   mimeType: string;
   customApiKey?: string;
+  geminiModel?: string;
   ollamaEndpoint?: string;
   ollamaModel?: string;
   openaiCompatBaseUrl?: string;
@@ -76,11 +92,11 @@ export async function translateUltraModePage(opts: UltraTranslateOptions): Promi
     const schemaInstructions = `
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry:
 [
-  { "region": number, "originalText": string, "translatedText": string, "fontFamily": string (optional, sfx regions only) },
+  { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
   { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
 ]`;
 
-    const response = await fetch(`${opts.ollamaEndpoint.replace(/\/$/, "")}/api/generate`, {
+    const response = await fetchOllama(`${opts.ollamaEndpoint.replace(/\/$/, "")}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -122,7 +138,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
     const schemaInstructions = `
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry:
 [
-  { "region": number, "originalText": string, "translatedText": string, "fontFamily": string (optional, sfx regions only) },
+  { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
   { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
 ]`;
 
@@ -159,8 +175,8 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
   if (!opts.customApiKey) throw new Error("API Key is required");
   const ai = new GoogleGenAI({ apiKey: opts.customApiKey });
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+  const response = await callGeminiWithRetry(() => ai.models.generateContent({
+    model: opts.geminiModel || "gemini-2.5-flash",
     contents: [
       { text: prompt },
       { inlineData: { data: rawBase64, mimeType: opts.mimeType } },
@@ -182,6 +198,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
                   region: { type: Type.INTEGER },
                   originalText: { type: Type.STRING },
                   translatedText: { type: Type.STRING },
+                  skip: { type: Type.BOOLEAN },
                   fontFamily: { type: Type.STRING },
                   // "extra" (detector-missed) entries: geometry + typesetting fields.
                   // All optional here since Gemini's structured schema doesn't support
@@ -209,7 +226,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
         },
       },
     },
-  });
+  }));
 
   const text = response.text;
   if (!text) throw new Error("Ultra Mode: no text returned from Gemini");

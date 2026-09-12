@@ -1,6 +1,25 @@
 import { RawRegion } from "./gemini";
 import { buildTypesettingPrompt, PageHint } from "./prompt";
 
+// A local Ollama server rejects cross-origin requests by default - the browser blocks the
+// response entirely (no HTTP status, `fetch` just throws a generic "Failed to fetch"
+// TypeError) unless the server was started with OLLAMA_ORIGINS including this app's
+// origin. That raw browser error gives no hint of what actually went wrong, so this wraps
+// every Ollama fetch and turns that specific failure mode into an actionable message.
+export async function fetchOllama(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    throw new Error(
+      `Could not reach Ollama at ${url}. If Ollama IS running, this is almost always a CORS block: ` +
+      `by default Ollama only accepts requests from its own origin, not from a browser tab. ` +
+      `Restart Ollama with the OLLAMA_ORIGINS environment variable set to allow this app - e.g. ` +
+      `OLLAMA_ORIGINS=* ollama serve (or add this app's exact origin instead of * for tighter security). ` +
+      `Original error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 export async function processMangaPagesOllama(
   pages: { id: string, base64Image: string, mimeType: string }[],
   endpoint: string,
@@ -55,7 +74,7 @@ Return: [ { ... }, { ... } ]`;
       pageHints: hintForPage ? [{ pageIndex: 0, hint: hintForPage.hint }] : undefined,
     });
 
-    const response = await fetch(`${endpoint.replace(/\/$/, "")}/api/generate`, {
+    const response = await fetchOllama(`${endpoint.replace(/\/$/, "")}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

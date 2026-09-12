@@ -147,7 +147,32 @@ export interface ResolvedBubbleGeometry {
 // floodFillBubbleDetailed returns, so downstream region-building code can treat both
 // paths identically. Falls back to flood-fill seeded from the bbox center when the
 // detector didn't provide geometry beyond the bounding box.
+//
+// `centerFrom`: an optional second detection (typically a paired 'text' detection sitting
+// inside this 'bubble' detection - see pairBubbleAndTextDetections) whose own center should
+// be used instead of this detection's natural centroid. This is the "2 connected bubbles"
+// fix: when two bubbles touch/overlap, a bubble-shape-derived center can land in the wrong
+// spot or span both bubbles, but the text detection inside each one is reliably centered on
+// that bubble's actual dialogue. The SIZE (width/height/safeTextBounds dimensions) still
+// comes entirely from `detection` - only the position is re-centered.
 export function resolveBubblePolygon(
+  detection: DetectorDetection,
+  imageData: ImageData,
+  centerFrom?: DetectorDetection
+): ResolvedBubbleGeometry | null {
+  const base = resolveGeometryForDetection(detection, imageData);
+  if (!base || !centerFrom) return base;
+
+  const target = detectionBboxCenter(centerFrom);
+  const currentCenterX = base.x + base.width / 2;
+  const currentCenterY = base.y + base.height / 2;
+  const dx = target.x - currentCenterX;
+  const dy = target.y - currentCenterY;
+
+  return shiftResolvedGeometry(base, dx, dy);
+}
+
+function resolveGeometryForDetection(
   detection: DetectorDetection,
   imageData: ImageData
 ): ResolvedBubbleGeometry | null {
@@ -205,4 +230,109 @@ export function resolveBubblePolygon(
     contour: result.contour,
     safeTextBounds: result.safeTextBounds,
   };
+}
+
+function detectionBboxCenter(detection: DetectorDetection): { x: number; y: number } {
+  return {
+    x: (detection.bbox.x1 + detection.bbox.x2) / 2,
+    y: (detection.bbox.y1 + detection.bbox.y2) / 2,
+  };
+}
+
+function shiftResolvedGeometry(geometry: ResolvedBubbleGeometry, dx: number, dy: number): ResolvedBubbleGeometry {
+  if (dx === 0 && dy === 0) return geometry;
+  const contour: number[] = [];
+  for (let i = 0; i < geometry.contour.length; i += 2) {
+    contour.push(geometry.contour[i] + dx, geometry.contour[i + 1] + dy);
+  }
+  return {
+    x: geometry.x + dx,
+    y: geometry.y + dy,
+    width: geometry.width,
+    height: geometry.height,
+    contour,
+    safeTextBounds: {
+      x: geometry.safeTextBounds.x + dx,
+      y: geometry.safeTextBounds.y + dy,
+      width: geometry.safeTextBounds.width,
+      height: geometry.safeTextBounds.height,
+    },
+  };
+}
+
+function bboxIntersectionArea(a: DetectorBBox, b: DetectorBBox): number {
+  const x1 = Math.max(a.x1, b.x1);
+  const y1 = Math.max(a.y1, b.y1);
+  const x2 = Math.min(a.x2, b.x2);
+  const y2 = Math.min(a.y2, b.y2);
+  if (x2 <= x1 || y2 <= y1) return 0;
+  return (x2 - x1) * (y2 - y1);
+}
+
+function bboxArea(b: DetectorBBox): number {
+  return Math.max(0, b.x2 - b.x1) * Math.max(0, b.y2 - b.y1);
+}
+
+export interface PairedSlotDetection {
+  // The detection whose geometry sizes the region: a 'bubble' detection when paired with a
+  // 'text' detection sitting inside it, or the detection's own geometry for a lone/unpaired
+  // 'text'/'sfx' detection.
+  primary: DetectorDetection;
+  // When set, the paired 'text' detection used to re-center `primary`'s geometry (see
+  // resolveBubblePolygon's `centerFrom` parameter) instead of `primary`'s own centroid.
+  centerFrom?: DetectorDetection;
+}
+
+// Pairs each 'bubble' detection with the 'text' detection (if any) that mostly overlaps it,
+// so the two can be treated as one logical region: the bubble's geometry sizes the region,
+// the text's geometry centers it. This is the fix for two touching/connected bubbles, where
+// a naive bubble-shape center can land in the wrong bubble or straddle both - the text
+// detection inside each bubble reliably marks where that bubble's own dialogue actually is.
+//
+// A 'text' detection that gets paired this way is consumed here and does NOT appear again in
+// the returned list, so callers building one numbered marker per entry never double-count the
+// same dialogue (once via the bubble, once via its paired text). Unpaired 'text' detections
+// (free-floating text with no overlapping bubble) and any other class ('sfx', etc.) pass
+// through unchanged as their own entry, using their own geometry for both size and center.
+export function pairBubbleAndTextDetections(detections: DetectorDetection[]): PairedSlotDetection[] {
+  const bubbles = detections.filter(d => d.class_name === 'bubble');
+  const texts = detections.filter(d => d.class_name === 'text');
+  const others = detections.filter(d => d.class_name !== 'bubble' && d.class_name !== 'text');
+
+  const usedTextIndices = new Set<number>();
+  const result: PairedSlotDetection[] = [];
+
+  for (const bubble of bubbles) {
+    let bestIdx = -1;
+    let bestOverlap = 0;
+    texts.forEach((text, idx) => {
+      if (usedTextIndices.has(idx)) return;
+      const textArea = bboxArea(text.bbox);
+      if (textArea <= 0) return;
+      // How much of the TEXT detection sits inside the bubble - the natural measure for
+      // "this text belongs to this bubble" regardless of how much larger the bubble is.
+      const overlapRatio = bboxIntersectionArea(bubble.bbox, text.bbox) / textArea;
+      if (overlapRatio > bestOverlap) {
+        bestOverlap = overlapRatio;
+        bestIdx = idx;
+      }
+    });
+
+    // Require most of the text box to sit inside the bubble box before treating them as the
+    // same logical region - a low/partial overlap is more likely two unrelated detections.
+    if (bestIdx !== -1 && bestOverlap >= 0.5) {
+      usedTextIndices.add(bestIdx);
+      result.push({ primary: bubble, centerFrom: texts[bestIdx] });
+    } else {
+      result.push({ primary: bubble });
+    }
+  }
+
+  texts.forEach((text, idx) => {
+    if (!usedTextIndices.has(idx)) result.push({ primary: text });
+  });
+
+  result.push(...others.map(d => ({ primary: d })));
+
+  return result;
 }
