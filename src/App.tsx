@@ -2966,17 +2966,7 @@ export default function App() {
         {activeNavigationTab === 'library' && activeChapterId !== null && images.length > 0 && (
           <>
             {/* Left Sidebar (Thumbnails) */}
-            {/* !fixed: .glass-noise (index.css) sets position:relative for its ::before noise
-                overlay, and - same specificity, later in the compiled CSS - that rule
-                otherwise beats Tailwind's plain `fixed` utility below the md breakpoint, so
-                the aside never actually leaves document flow on phone widths (it computes to
-                position:relative instead of fixed) and permanently reserves its full width
-                even when translated off-screen, pushing the canvas over. The `!` modifier
-                forces `fixed` to win there. Deliberately NOT forcing md:static the same way -
-                letting .glass-noise's position:relative win at that breakpoint is harmless
-                (relative behaves like static for layout without inset offsets) and is what
-                correctly contains the noise overlay once this aside becomes non-fixed. */}
-            <aside className={`!fixed inset-y-0 left-0 z-40 w-64 max-w-[85vw] transform transition-transform duration-300 ${showLeftPanel ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:z-auto md:w-64 shrink-0 border-r border-sky-500/10 bg-black/30 backdrop-blur-md flex flex-col overflow-y-auto glass-noise transition-all`}>
+            <aside className={`fixed inset-y-0 left-0 z-40 w-64 max-w-[85vw] transform transition-transform duration-300 ${showLeftPanel ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:z-auto md:w-64 shrink-0 border-r border-sky-500/10 bg-black/30 backdrop-blur-md flex flex-col overflow-y-auto glass-noise transition-all`}>
               <div className="flex items-center justify-center gap-2 p-2 border-b border-[#333]/50 shrink-0">
                 <button
                   onClick={() => {
