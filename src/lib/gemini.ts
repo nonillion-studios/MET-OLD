@@ -2,16 +2,23 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Region } from "../types";
 import { buildTypesettingPrompt, PageHint } from "./prompt";
 
-// Gemini periodically returns transient errors under load - most commonly HTTP 503
-// ("model overloaded") and 429 (rate limited) - that usually succeed on a retry a few
-// seconds later. Without this, one blip fails an entire page-processing batch outright
-// even though the same request would likely work seconds later.
+// Gemini periodically returns transient errors under load - HTTP 503 ("model overloaded"),
+// 429 (rate limited), 500/"INTERNAL", and outright network failures (a dropped connection,
+// a timeout, "fetch failed") - that usually succeed on a retry a few seconds later. Without
+// this, one blip fails an entire page-processing batch outright even though the same
+// request would likely work seconds later. Broadened beyond just 503/429: those two alone
+// were missing real-world failures like a mid-request network drop, which throws a plain
+// TypeError with no status code in the message at all.
 function isRetryableGeminiError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return /\b(503|429|UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|rate.?limit)\b/i.test(message);
+  if (/\b(500|503|429|INTERNAL|UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|overloaded|rate.?limit)\b/i.test(message)) return true;
+  // Network-level failures carry no HTTP status at all - fetch throws a bare TypeError
+  // ("Failed to fetch" / "fetch failed" / "network error") rather than an HTTP response.
+  if (/\b(failed to fetch|fetch failed|network ?error|timed? ?out|ECONNRESET|ETIMEDOUT|ECONNREFUSED)\b/i.test(message)) return true;
+  return false;
 }
 
-export async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
+export async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxAttempts = 5): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -19,8 +26,8 @@ export async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxAttempts =
     } catch (err) {
       lastErr = err;
       if (attempt === maxAttempts || !isRetryableGeminiError(err)) throw err;
-      // Exponential backoff with jitter: ~1s, 2s, 4s (+/- up to 300ms) before retrying.
-      const delay = 2 ** (attempt - 1) * 1000 + Math.random() * 300;
+      // Exponential backoff with jitter, capped at 15s: ~1s, 2s, 4s, 8s (+/- up to 300ms).
+      const delay = Math.min(15000, 2 ** (attempt - 1) * 1000) + Math.random() * 300;
       console.warn(`Gemini request failed (attempt ${attempt}/${maxAttempts}, retrying in ${Math.round(delay)}ms):`, err instanceof Error ? err.message : err);
       await new Promise(resolve => setTimeout(resolve, delay));
     }

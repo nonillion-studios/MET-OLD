@@ -283,53 +283,68 @@ export interface PairedSlotDetection {
   centerFrom?: DetectorDetection;
 }
 
-// Pairs each 'bubble' detection with the 'text' detection (if any) that mostly overlaps it,
-// so the two can be treated as one logical region: the bubble's geometry sizes the region,
-// the text's geometry centers it. This is the fix for two touching/connected bubbles, where
-// a naive bubble-shape center can land in the wrong bubble or straddle both - the text
-// detection inside each bubble reliably marks where that bubble's own dialogue actually is.
+// Pairs each 'bubble' detection with the 'text'-or-'sfx' detection (if any) that mostly
+// overlaps it, so the two can be treated as one logical region: the bubble's geometry sizes
+// the region, the inner detection's geometry centers it. This is the fix for two
+// touching/connected bubbles, where a naive bubble-shape center can land in the wrong bubble
+// or straddle both - the inner detection inside each bubble reliably marks where that
+// bubble's own dialogue actually is.
 //
-// A 'text' detection that gets paired this way is consumed here and does NOT appear again in
-// the returned list, so callers building one numbered marker per entry never double-count the
-// same dialogue (once via the bubble, once via its paired text). Unpaired 'text' detections
-// (free-floating text with no overlapping bubble) and any other class ('sfx', etc.) pass
+// Candidates include 'sfx', not just 'text': the detector reliably finds 'bubble' shapes but
+// is inconsistent about labeling the dialogue GLYPHS inside them as 'text' vs 'sfx' (it
+// frequently calls ordinary in-bubble dialogue 'sfx'). Restricting pairing to 'text' only
+// meant most bubbles stayed unpaired AND the same dialogue, now labeled 'sfx', became its
+// OWN separate marker with sfx rendering (transparent background, expressive/SFX font,
+// tight non-bubble-shaped bounds) sitting on top of the empty bubble - which is exactly what
+// reads as "every bubble renders like SFX": both a correctly-typeset (but textless) bubble
+// AND a wrongly-typeset sfx duplicate of its own dialogue. Once an 'sfx' detection is paired
+// to a bubble this way, the PAIR is still typeset as `regionType: 'bubble'` by the caller
+// (region type is decided by `primary`, which is the bubble here) regardless of the inner
+// detection's own class - being inside a real speech bubble overrides an ambiguous
+// text-vs-sfx sub-label for rendering purposes. Only a genuinely unpaired 'sfx' detection
+// (real floating SFX art with no enclosing bubble) still renders as sfx.
+//
+// A detection that gets paired this way is consumed here and does NOT appear again in the
+// returned list, so callers building one numbered marker per entry never double-count the
+// same dialogue (once via the bubble, once via its paired text/sfx). Unpaired 'text'/'sfx'
+// detections (free-floating, no overlapping bubble) and any other class ('panel', etc.) pass
 // through unchanged as their own entry, using their own geometry for both size and center.
 export function pairBubbleAndTextDetections(detections: DetectorDetection[]): PairedSlotDetection[] {
   const bubbles = detections.filter(d => d.class_name === 'bubble');
-  const texts = detections.filter(d => d.class_name === 'text');
-  const others = detections.filter(d => d.class_name !== 'bubble' && d.class_name !== 'text');
+  const candidates = detections.filter(d => d.class_name === 'text' || d.class_name === 'sfx');
+  const others = detections.filter(d => d.class_name !== 'bubble' && d.class_name !== 'text' && d.class_name !== 'sfx');
 
-  const usedTextIndices = new Set<number>();
+  const usedCandidateIndices = new Set<number>();
   const result: PairedSlotDetection[] = [];
 
   for (const bubble of bubbles) {
     let bestIdx = -1;
     let bestOverlap = 0;
-    texts.forEach((text, idx) => {
-      if (usedTextIndices.has(idx)) return;
-      const textArea = bboxArea(text.bbox);
-      if (textArea <= 0) return;
-      // How much of the TEXT detection sits inside the bubble - the natural measure for
+    candidates.forEach((candidate, idx) => {
+      if (usedCandidateIndices.has(idx)) return;
+      const candidateArea = bboxArea(candidate.bbox);
+      if (candidateArea <= 0) return;
+      // How much of the candidate detection sits inside the bubble - the natural measure for
       // "this text belongs to this bubble" regardless of how much larger the bubble is.
-      const overlapRatio = bboxIntersectionArea(bubble.bbox, text.bbox) / textArea;
+      const overlapRatio = bboxIntersectionArea(bubble.bbox, candidate.bbox) / candidateArea;
       if (overlapRatio > bestOverlap) {
         bestOverlap = overlapRatio;
         bestIdx = idx;
       }
     });
 
-    // Require most of the text box to sit inside the bubble box before treating them as the
-    // same logical region - a low/partial overlap is more likely two unrelated detections.
+    // Require most of the candidate box to sit inside the bubble box before treating them as
+    // the same logical region - a low/partial overlap is more likely two unrelated detections.
     if (bestIdx !== -1 && bestOverlap >= 0.5) {
-      usedTextIndices.add(bestIdx);
-      result.push({ primary: bubble, centerFrom: texts[bestIdx] });
+      usedCandidateIndices.add(bestIdx);
+      result.push({ primary: bubble, centerFrom: candidates[bestIdx] });
     } else {
       result.push({ primary: bubble });
     }
   }
 
-  texts.forEach((text, idx) => {
-    if (!usedTextIndices.has(idx)) result.push({ primary: text });
+  candidates.forEach((candidate, idx) => {
+    if (!usedCandidateIndices.has(idx)) result.push({ primary: candidate });
   });
 
   result.push(...others.map(d => ({ primary: d })));
