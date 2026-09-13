@@ -1828,7 +1828,11 @@ export default function App() {
           strokeColor: result.strokeColor || 'transparent',
           strokeWidth: result.strokeWidth ?? 0,
           bgColor: img.originalDataUrl ? 'transparent' : (regionType === 'bubble' ? '#ffffff' : 'transparent'),
-          fontFamily: result.fontFamily || (isSfx ? 'Aref Ruqaa' : 'Marhey'),
+          // Default to Marhey regardless of the YOLO class, not conditionally on isSfx -
+          // the detector's bubble/text/sfx classification is known to be unreliable (see
+          // the "ultra typeset go sfx" investigation), so a fallback that keys off it
+          // just reintroduces the same bug whenever the AI's own fontFamily is missing.
+          fontFamily: result.fontFamily || 'Marhey',
           fontSize: Math.max(18, Math.floor(bounds.height / 3)),
           fontWeight: result.fontWeight || 'normal',
           fontStyle: result.fontStyle || 'normal',
