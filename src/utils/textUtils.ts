@@ -27,8 +27,27 @@ export function mapRawRegionToPixels(
   return clampRegionToImage(x, y, width, height, imgWidth, imgHeight);
 }
 
+// Historically wrapped each line in U+2067 FIRST STRONG ISOLATE / U+2069 POP DIRECTIONAL
+// ISOLATE to force RTL direction for Konva's canvas text rendering. Empirically disproven:
+// reported bug was neutral punctuation (ellipsis, ؟, !) at the START of a line rendering on
+// the wrong (left) visual side. Reproduced and measured directly (render to a real canvas,
+// locate glyphs by template-matching their ink profile against known x-ranges):
+//   - WITH the FSI/PDI wrapping: a leading "..." in "...يا ترى كم تعلمت" renders at the
+//     LEFT edge - wrong, should be rightmost since it's logically first in RTL text.
+//   - WITHOUT any wrapping (raw text): the same string renders "..." correctly at the
+//     RIGHT edge. Chrome's canvas text rendering already runs the Unicode Bidi Algorithm
+//     for Arabic-containing strings with no help needed - the isolate marks were actively
+//     fighting it for leading neutrals, not helping it.
+// Also verified plain Arabic (no marks) still shapes/joins correctly (multi-word sentences,
+// digit-leading text like "3 أيام مرت", and multi-letter joined words like "المعروفة" all
+// render correctly without the wrapper), and that Konva's own multi-line word-wrap - which
+// only ever saw the isolate marks at the true start/end of the whole string, never around
+// each individually-wrapped visual line - was part of why interior wrapped lines behaved
+// inconsistently from the first/last line. A no-op avoids that entirely.
+// Kept as a named pass-through (not deleted / inlined at call sites) so a future bidi
+// regression is easy to trace back to this decision and its reasoning.
 export function wrapRtlLines(text: string): string {
-  return text.split('\n').map(line => '⁧' + line + '⁩').join('\n');
+  return text;
 }
 
 // Reference size for comparing words' rendered widths - large enough that per-glyph
