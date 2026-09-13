@@ -36,6 +36,15 @@ function textDetection(x1: number, y1: number, x2: number, y2: number): Detector
   };
 }
 
+function sfxDetection(x1: number, y1: number, x2: number, y2: number): DetectorDetection {
+  return {
+    class_name: 'sfx',
+    confidence: 0.9,
+    bbox: { x1, y1, x2, y2 },
+    polygon: rectPolygon(x1, y1, x2, y2),
+  };
+}
+
 const imageData = makeImageData(2000, 2000);
 
 describe('pairBubbleAndTextDetections', () => {
@@ -73,6 +82,30 @@ describe('pairBubbleAndTextDetections', () => {
     expect(pairs[0].centerFrom).toBe(textA);
     expect(pairs[1].primary).toBe(bubbleB);
     expect(pairs[1].centerFrom).toBe(textB);
+  });
+
+  it('pairs a bubble with an sfx-labeled detection sitting inside it, not just text-labeled', () => {
+    // The detector reliably finds bubble shapes but is inconsistent about labeling ordinary
+    // in-bubble dialogue as 'text' vs 'sfx' - it frequently mislabels it 'sfx'. Pairing must
+    // still catch this case (previously it only matched class_name === 'text'), or the
+    // dialogue renders twice: once as an empty bubble, once as a wrongly-styled sfx duplicate.
+    const bubble = bubbleDetection(100, 100, 300, 300);
+    const sfx = sfxDetection(150, 150, 250, 200);
+    const pairs = pairBubbleAndTextDetections([bubble, sfx]);
+
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].primary).toBe(bubble);
+    expect(pairs[0].centerFrom).toBe(sfx);
+  });
+
+  it('leaves a genuinely unpaired sfx detection (real floating SFX art) as its own sfx entry', () => {
+    const sfx = sfxDetection(400, 400, 500, 450);
+    const pairs = pairBubbleAndTextDetections([sfx]);
+
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].primary).toBe(sfx);
+    expect(pairs[0].primary.class_name).toBe('sfx');
+    expect(pairs[0].centerFrom).toBeUndefined();
   });
 
   it('does not pair a text detection that only barely overlaps a bubble', () => {
