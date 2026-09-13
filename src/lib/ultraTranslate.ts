@@ -90,7 +90,7 @@ export async function translateUltraModePage(opts: UltraTranslateOptions): Promi
     if (!opts.ollamaModel) throw new Error("Ollama model name is required");
 
     const schemaInstructions = `
-IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry:
+IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry. ALWAYS include every typesetting field listed below (angle, textColor, strokeColor, strokeWidth, fontFamily, fontWeight, fontStyle, textAlign, lineHeight) for EVERY entry, even ordinary calm dialogue - do not omit them just because the answer is a plain/default value (e.g. angle: 0, strokeColor: "transparent" are still real, deliberate answers you must write out):
 [
   { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
   { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
@@ -136,7 +136,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
     if (!opts.openaiCompatModel) throw new Error("Model name is required");
 
     const schemaInstructions = `
-IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry:
+IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry. ALWAYS include every typesetting field listed below (angle, textColor, strokeColor, strokeWidth, fontFamily, fontWeight, fontStyle, textAlign, lineHeight) for EVERY entry, even ordinary calm dialogue - do not omit them just because the answer is a plain/default value (e.g. angle: 0, strokeColor: "transparent" are still real, deliberate answers you must write out):
 [
   { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
   { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
@@ -218,7 +218,21 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
                   textAlign: { type: Type.STRING },
                   lineHeight: { type: Type.NUMBER },
                 },
-                required: ["originalText", "translatedText"],
+                // Gemini's structured-output mode treats anything NOT listed here as
+                // truly optional and will often just omit it rather than commit to a
+                // value - which is exactly what was happening to angle/textColor/
+                // strokeColor/fontFamily/etc despite the prompt asking for them on every
+                // entry, silently falling through to this app's own JS defaults (0,
+                // 'transparent', a YOLO-class-based font guess) instead of the AI's
+                // actual typesetting judgment. Forcing them all required (for BOTH
+                // numbered and "extra" entries, since this one shared object schema
+                // fakes a union - see the comment above) makes the model commit to an
+                // explicit value every time instead of silently opting out.
+                required: [
+                  "originalText", "translatedText",
+                  "angle", "textColor", "strokeColor", "strokeWidth",
+                  "fontFamily", "fontWeight", "fontStyle", "textAlign", "lineHeight",
+                ],
               },
             },
           },
