@@ -3,7 +3,7 @@ import Konva from 'konva';
 import { Stage, Layer, Image as KonvaImage, Rect, Text, Group, Transformer, Line } from 'react-konva';
 import useImage from 'use-image';
 import { ProcessedImage, Region, PaintStroke, Tool } from '../types';
-import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing } from '../utils/textUtils';
 import { Loader2 } from 'lucide-react';
 
 interface ImageEditorProps {
@@ -24,6 +24,7 @@ interface ImageEditorProps {
 
 const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWidth: number; pageHeight: number }) => {
   const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
+  const letterSpacing = safeLetterSpacing(region.translatedText || '', region.letterSpacing);
 
   const fontSize = useMemo(() => {
     if (!region.autoFitText) {
@@ -36,7 +37,7 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
       region.fontFamily,
       fontStyleStr,
       region.lineHeight || 1.2,
-      region.letterSpacing || 0,
+      letterSpacing,
       region.fontSize
     );
   }, [
@@ -48,7 +49,7 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
     region.autoFitText,
     region.lineHeight,
     fontStyleStr,
-    region.letterSpacing
+    letterSpacing
   ]);
 
   // Ensure the box never clips the text: grow the rendered width first (a single word
@@ -67,7 +68,7 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
       region.fontFamily,
       fontStyleStr,
       region.lineHeight || 1.2,
-      region.letterSpacing || 0,
+      letterSpacing,
       fontSize,
       pageWidth,
       pageHeight
@@ -81,7 +82,7 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
     region.fontFamily,
     fontStyleStr,
     region.lineHeight,
-    region.letterSpacing,
+    letterSpacing,
     fontSize,
     pageWidth,
     pageHeight
@@ -113,7 +114,7 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
         align={region.textAlign}
         verticalAlign="middle"
         lineHeight={region.lineHeight || 1.2}
-        letterSpacing={region.letterSpacing || 0}
+        letterSpacing={letterSpacing}
         wrap="word"
         listening={false}
         fillAfterStrokeEnabled={true}

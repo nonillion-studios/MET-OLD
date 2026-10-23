@@ -11,7 +11,7 @@ import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
 import { detectPage, detectPageViaGradio, resolveBubblePolygon, pairBubbleAndTextDetections, DetectorDetection } from './lib/detector';
 import { translateUltraModePage, UltraRegionResult } from './lib/ultraTranslate';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
-import { mapRawRegionToPixels, applyOvalKashidaJustification, normalizeArabicPunctuation } from './utils/textUtils';
+import { mapRawRegionToPixels, applyOvalKashidaJustification, normalizeArabicPunctuation, hasArabicText } from './utils/textUtils';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -2991,6 +2991,13 @@ export default function App() {
                     <span className="bg-emerald-500 text-white text-[10px] uppercase font-bold px-1.5 py-0.5 rounded">Done</span>
                   </div>
                 )}
+                {!!img.userTranslationHint?.trim() && (
+                  <div className="absolute bottom-2 left-2 flex gap-1" title="Reference translation attached to this page">
+                    <span className="bg-amber-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                      <FileText size={10} /> Ref
+                    </span>
+                  </div>
+                )}
 
                 {/* Overlays for ordering and deletion */}
                 <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -3475,18 +3482,24 @@ export default function App() {
 
                 <div className="grid grid-cols-2 gap-4 mt-2">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-slate-400">Letter Spacing</label>
+                    <label className="text-xs font-medium text-slate-400">
+                      Letter Spacing
+                      {hasArabicText(selectedRegion.translatedText || '') && (
+                        <span className="text-amber-400 font-normal"> (disabled for Arabic text - breaks letter joining)</span>
+                      )}
+                    </label>
                     <div className="flex items-center gap-3">
                       <input
                         type="range"
                         min="-5"
                         max="20"
                         step="0.5"
-                        value={selectedRegion.letterSpacing || 0}
+                        disabled={hasArabicText(selectedRegion.translatedText || '')}
+                        value={hasArabicText(selectedRegion.translatedText || '') ? 0 : (selectedRegion.letterSpacing || 0)}
                         onChange={(e) => updateRegion(selectedRegion.id, { letterSpacing: Number(e.target.value) })}
-                        className="flex-1 accent-blue-500"
+                        className="flex-1 accent-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
                       />
-                      <span className="text-xs w-6 text-left font-mono">{selectedRegion.letterSpacing || 0}</span>
+                      <span className="text-xs w-6 text-left font-mono">{hasArabicText(selectedRegion.translatedText || '') ? 0 : (selectedRegion.letterSpacing || 0)}</span>
                     </div>
                   </div>
                   <div className="space-y-1.5">

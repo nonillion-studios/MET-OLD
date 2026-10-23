@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
 import { saveAs } from 'file-saver';
 import { ProcessedImage } from '../types';
-import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing } from '../utils/textUtils';
 
 export async function extractImagesFromZip(file: File): Promise<ProcessedImage[]> {
   const zip = await JSZip.loadAsync(file);
@@ -111,7 +111,8 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
 
   img.regions.forEach(region => {
     const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
-    
+    const letterSpacing = safeLetterSpacing(region.translatedText || '', region.letterSpacing);
+
     let renderFontSize = region.fontSize;
     if (region.autoFitText) {
       renderFontSize = calculateAutoFitFontSize(
@@ -121,7 +122,7 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
         region.fontFamily,
         fontStyleStr,
         region.lineHeight || 1.2,
-        region.letterSpacing || 0,
+        letterSpacing,
         region.fontSize
       );
     }
@@ -140,7 +141,7 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
         region.fontFamily,
         fontStyleStr,
         region.lineHeight || 1.2,
-        region.letterSpacing || 0,
+        letterSpacing,
         renderFontSize,
         img.width,
         img.height
@@ -172,7 +173,7 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
       fillAfterStrokeEnabled: true,
       shadowColor: region.shadowColor !== 'transparent' && !!region.shadowColor ? region.shadowColor : undefined,
       shadowBlur: region.shadowBlur || 0,
-      letterSpacing: region.letterSpacing || 0
+      letterSpacing: letterSpacing
     }));
     layer3.add(group);
   });

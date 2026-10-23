@@ -50,6 +50,26 @@ export function wrapRtlLines(text: string): string {
   return text;
 }
 
+// Konva's <Text> only draws a whole line with one fillText() call when letterSpacing is
+// exactly 0 (and align isn't 'justify') - any nonzero letterSpacing makes it fall back to
+// drawing one fillText() PER CHARACTER instead (see konva/lib/shapes/Text.js, the
+// `letterSpacing !== 0` branch). Per-character drawing defeats the browser's own Arabic
+// text shaping entirely: each letter gets painted in isolation instead of as part of a
+// connected run, so cursive joins break and the word reads as disconnected glyphs. Since
+// this app's whole purpose is Arabic typesetting, letterSpacing is effectively never safe
+// to apply to Arabic text - callers should clamp it to 0 whenever `hasArabicText` is true,
+// regardless of what a region's stored letterSpacing value is (user slider, imported
+// project, etc).
+export function hasArabicText(text: string): boolean {
+  return /[؀-ۿ]/.test(text || '');
+}
+
+// Returns a letterSpacing value that's safe to hand to Konva/export renderers for `text` -
+// 0 whenever the text contains Arabic, the stored value otherwise.
+export function safeLetterSpacing(text: string, letterSpacing: number | undefined): number {
+  return hasArabicText(text) ? 0 : (letterSpacing || 0);
+}
+
 // Maps Latin/ASCII punctuation an AI translator commonly slips into Arabic output to its
 // Arabic typographic equivalent. Conservative - only remaps marks that have a clearly
 // "wrong looking" Arabic counterpart; '!', '.', and '…' are used as-is in Arabic too.

@@ -11,7 +11,7 @@
 import { writePsd, LayerTextData } from 'ag-psd';
 import Konva from 'konva';
 import { ProcessedImage, Region } from '../types';
-import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing } from '../utils/textUtils';
 
 async function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -121,12 +121,13 @@ async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage
   if (!region.translatedText || !region.translatedText.trim()) return null;
 
   const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
+  const letterSpacing = safeLetterSpacing(region.translatedText, region.letterSpacing);
 
   let renderFontSize = region.fontSize;
   if (region.autoFitText) {
     renderFontSize = calculateAutoFitFontSize(
       region.translatedText, region.width, region.height, region.fontFamily,
-      fontStyleStr, region.lineHeight || 1.2, region.letterSpacing || 0, region.fontSize
+      fontStyleStr, region.lineHeight || 1.2, letterSpacing, region.fontSize
     );
   }
 
@@ -134,7 +135,7 @@ async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage
   // the ZIP/PDF export do - see calculateAutoFitBox for why width has to be checked too.
   const { renderWidth, renderHeight, xOffset, yOffset } = calculateAutoFitBox(
     region.translatedText, region.x, region.y, region.width, region.height,
-    region.fontFamily, fontStyleStr, region.lineHeight || 1.2, region.letterSpacing || 0,
+    region.fontFamily, fontStyleStr, region.lineHeight || 1.2, letterSpacing,
     renderFontSize, img.width, img.height
   );
 
@@ -187,7 +188,7 @@ async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage
     fillAfterStrokeEnabled: true,
     shadowColor: region.shadowColor !== 'transparent' && !!region.shadowColor ? region.shadowColor : undefined,
     shadowBlur: region.shadowBlur || 0,
-    letterSpacing: region.letterSpacing || 0
+    letterSpacing: letterSpacing
   }));
   layer.add(group);
   stage.add(layer);
@@ -233,18 +234,19 @@ function buildNativeTextLayerData(img: ProcessedImage, region: Region): LayerTex
   if (!region.translatedText || !region.translatedText.trim()) return null;
 
   const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
+  const letterSpacing = safeLetterSpacing(region.translatedText, region.letterSpacing);
 
   let renderFontSize = region.fontSize;
   if (region.autoFitText) {
     renderFontSize = calculateAutoFitFontSize(
       region.translatedText, region.width, region.height, region.fontFamily,
-      fontStyleStr, region.lineHeight || 1.2, region.letterSpacing || 0, region.fontSize
+      fontStyleStr, region.lineHeight || 1.2, letterSpacing, region.fontSize
     );
   }
 
   const { renderWidth, renderHeight, xOffset, yOffset } = calculateAutoFitBox(
     region.translatedText, region.x, region.y, region.width, region.height,
-    region.fontFamily, fontStyleStr, region.lineHeight || 1.2, region.letterSpacing || 0,
+    region.fontFamily, fontStyleStr, region.lineHeight || 1.2, letterSpacing,
     renderFontSize, img.width, img.height
   );
 
@@ -275,7 +277,7 @@ function buildNativeTextLayerData(img: ProcessedImage, region: Region): LayerTex
       fauxItalic: isItalic,
       autoLeading: false,
       leading: renderFontSize * (region.lineHeight || 1.2),
-      tracking: renderFontSize > 0 ? Math.round(((region.letterSpacing || 0) / renderFontSize) * 1000) : 0,
+      tracking: renderFontSize > 0 ? Math.round((letterSpacing / renderFontSize) * 1000) : 0,
       fillColor: hexToRgb(region.textColor),
       fillFlag: true,
       strokeColor: hasStroke ? hexToRgb(region.strokeColor) : undefined,
