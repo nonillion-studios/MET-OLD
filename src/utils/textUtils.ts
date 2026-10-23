@@ -134,7 +134,11 @@ export function calculateAutoFitFontSize(
   fontStyle: string,
   lineHeight: number,
   letterSpacing: number,
-  defaultFontSize: number
+  defaultFontSize: number,
+  // Lower absolute floor to allow for a region whose box is authoritative and must not
+  // grow (see calculateAutoFitBox's `maxGrowth` / Region.lockGeometry) - shrinking the
+  // font further is the lesser evil there, instead of overflowing the box.
+  minFontSizeFloor = 9
 ): number {
   if (!text) return defaultFontSize;
 
@@ -146,7 +150,7 @@ export function calculateAutoFitFontSize(
   // technically "fits" the box. Mirrors the "cap font size to source text height"
   // technique other manga-translation tools use, adapted to what's available here (no
   // separate OCR glyph-height measurement, so the AI's own size suggestion is the proxy).
-  let minFontSize = 8;
+  let minFontSize = Math.min(8, minFontSizeFloor);
   let maxFontSize = Math.max(minFontSize, Math.min(100, Math.round(defaultFontSize * 1.15)));
   let bestFontSize = defaultFontSize;
 
@@ -202,7 +206,7 @@ export function calculateAutoFitFontSize(
   measureNode.destroy();
   testNode.destroy();
 
-  return Math.max(9, bestFontSize); // Absolute minimum 9px to prevent unreadable microscopic fonts
+  return Math.max(minFontSizeFloor, bestFontSize);
 }
 
 // Measures the actual wrapped height that `text` requires at `fontSize` within `width`,
@@ -420,6 +424,13 @@ export function resolveRegionOverlaps<T extends OverlapBox>(
   return regions.map((r, idx) => ({ ...r, x: boxes[idx].x, y: boxes[idx].y }));
 }
 
+// Tuning for Region.lockGeometry (Ultra Mode numbered-marker regions): the font should
+// shrink well past the normal 9px floor, and the box should barely grow at all, since the
+// box itself is the YOLO-detected landmark and the AI has no say over it - see the comment
+// on Region.lockGeometry in types.ts.
+export const LOCKED_GEOMETRY_MIN_FONT_SIZE = 6;
+export const LOCKED_GEOMETRY_MAX_GROWTH = 1.15;
+
 export interface AutoFitBox {
   renderWidth: number;
   renderHeight: number;
@@ -451,7 +462,14 @@ export function calculateAutoFitBox(
   letterSpacing: number,
   fontSize: number,
   pageWidth: number,
-  pageHeight: number
+  pageHeight: number,
+  // Caps how far the box may grow beyond its original size, as a multiplier (1.2 = at
+  // most 20% bigger on that axis). Default Infinity preserves the old "always grow enough
+  // to never clip" behavior for a region whose box is just the AI's own best guess. Pass a
+  // tight cap (see Region.lockGeometry) for a region whose box is authoritative (e.g. a
+  // YOLO-detected landmark in Ultra Mode) - text that still doesn't fit at the cap is left
+  // to calculateAutoFitFontSize's lower minFontSizeFloor to shrink further instead.
+  maxGrowth = Infinity
 ): AutoFitBox {
   if (!text) return { renderWidth: regionWidth, renderHeight: regionHeight, xOffset: 0, yOffset: 0 };
 
@@ -461,11 +479,14 @@ export function calculateAutoFitBox(
   const longestWordWidth = measureNode.width();
   measureNode.destroy();
 
+  const maxRenderWidth = regionWidth * maxGrowth;
+  const maxRenderHeight = regionHeight * maxGrowth;
+
   let renderWidth = regionWidth;
   let xOffset = 0;
   // Small buffer so a word that fits within rounding error doesn't trigger a needless grow.
   if (longestWordWidth > regionWidth * 1.02) {
-    renderWidth = longestWordWidth * 1.06;
+    renderWidth = Math.min(longestWordWidth * 1.06, maxRenderWidth);
     const extra = renderWidth - regionWidth;
     xOffset = -extra / 2;
     if (regionX + xOffset < 0) xOffset = -regionX;
@@ -476,8 +497,8 @@ export function calculateAutoFitBox(
   let renderHeight = regionHeight;
   let yOffset = 0;
   if (requiredHeight > regionHeight) {
-    const extra = requiredHeight - regionHeight;
-    renderHeight = requiredHeight;
+    renderHeight = Math.min(requiredHeight, maxRenderHeight);
+    const extra = renderHeight - regionHeight;
     yOffset = -extra / 2;
     if (regionY + yOffset < 0) yOffset = -regionY;
     if (regionY + yOffset + renderHeight > pageHeight) yOffset = Math.min(yOffset, pageHeight - renderHeight - regionY);

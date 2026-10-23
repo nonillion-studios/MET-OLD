@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import { jsPDF } from 'jspdf';
 import { saveAs } from 'file-saver';
 import { ProcessedImage } from '../types';
-import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing, LOCKED_GEOMETRY_MIN_FONT_SIZE, LOCKED_GEOMETRY_MAX_GROWTH } from '../utils/textUtils';
 
 export async function extractImagesFromZip(file: File): Promise<ProcessedImage[]> {
   const zip = await JSZip.loadAsync(file);
@@ -123,7 +123,8 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
         fontStyleStr,
         region.lineHeight || 1.2,
         letterSpacing,
-        region.fontSize
+        region.fontSize,
+        region.lockGeometry ? LOCKED_GEOMETRY_MIN_FONT_SIZE : undefined
       );
     }
 
@@ -144,7 +145,8 @@ async function renderImageToDataUrl(img: ProcessedImage, format: 'jpeg' | 'png' 
         letterSpacing,
         renderFontSize,
         img.width,
-        img.height
+        img.height,
+        region.lockGeometry ? LOCKED_GEOMETRY_MAX_GROWTH : undefined
       ));
     }
 

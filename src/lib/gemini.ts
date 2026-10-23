@@ -217,7 +217,7 @@ export async function processMangaPages(pages: { id: string, base64Image: string
                   strokeColor: { type: Type.STRING, description: "hex color for text outline" },
                   strokeWidth: { type: Type.NUMBER },
                   bgColor: { type: Type.STRING, description: "Hex bg color or transparent" },
-                  fontFamily: { type: Type.STRING, description: "Cairo, Tajawal, Marhey, or Aref Ruqaa" },
+                  fontFamily: { type: Type.STRING, description: "Pick per the textType rules in the prompt - not always Marhey. Allowed: Cairo, Tajawal, Marhey, Aref Ruqaa, El Messiri, Amiri, Changa, Harmattan, Katibeh, Lalezar, Lemonada, Mada, Markazi Text, Reem Kufi, Rakkas, Almarai" },
                   fontSize: { type: Type.NUMBER },
                   fontWeight: { type: Type.STRING },
                   fontStyle: { type: Type.STRING },

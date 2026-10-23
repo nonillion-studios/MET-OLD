@@ -3,7 +3,7 @@ import Konva from 'konva';
 import { Stage, Layer, Image as KonvaImage, Rect, Text, Group, Transformer, Line } from 'react-konva';
 import useImage from 'use-image';
 import { ProcessedImage, Region, PaintStroke, Tool } from '../types';
-import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing, LOCKED_GEOMETRY_MIN_FONT_SIZE, LOCKED_GEOMETRY_MAX_GROWTH } from '../utils/textUtils';
 import { Loader2 } from 'lucide-react';
 
 interface ImageEditorProps {
@@ -38,7 +38,8 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
       fontStyleStr,
       region.lineHeight || 1.2,
       letterSpacing,
-      region.fontSize
+      region.fontSize,
+      region.lockGeometry ? LOCKED_GEOMETRY_MIN_FONT_SIZE : undefined
     );
   }, [
     region.translatedText,
@@ -49,7 +50,8 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
     region.autoFitText,
     region.lineHeight,
     fontStyleStr,
-    letterSpacing
+    letterSpacing,
+    region.lockGeometry
   ]);
 
   // Ensure the box never clips the text: grow the rendered width first (a single word
@@ -71,7 +73,8 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
       letterSpacing,
       fontSize,
       pageWidth,
-      pageHeight
+      pageHeight,
+      region.lockGeometry ? LOCKED_GEOMETRY_MAX_GROWTH : undefined
     );
   }, [
     region.translatedText,
@@ -85,7 +88,8 @@ const AutoFitText = ({ region, pageWidth, pageHeight }: { region: Region; pageWi
     letterSpacing,
     fontSize,
     pageWidth,
-    pageHeight
+    pageHeight,
+    region.lockGeometry
   ]);
 
   return (

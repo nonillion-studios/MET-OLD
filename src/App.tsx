@@ -1687,6 +1687,13 @@ export default function App() {
           shadowColor: 'transparent',
           autoFitText: true,
           bubbleContour: geometry.contour,
+          // This box came straight from the YOLO detector (`bounds`, from `geometry`
+          // above), not the AI - it's the authoritative landmark for this region, so
+          // auto-fit must shrink the font to stay inside it instead of growing the box
+          // past it into neighboring panels. "extra" (detector-missed) regions below are
+          // NOT marked this way since their box is the AI's own geometry guess, same as
+          // the normal (non-Ultra) pipeline.
+          lockGeometry: true,
         };
         return region;
       })

@@ -32,6 +32,13 @@ export interface Region {
   shadowColor?: string;
   shadowBlur?: number;
   bubbleContour?: number[];
+  // True for Ultra Mode's numbered-marker regions, whose x/y/width/height come straight
+  // from the YOLO detector (not the AI) and are meant to be authoritative - the AI never
+  // gets a say in a locked region's position/size. Auto-fit rendering should shrink the
+  // font to stay inside this box rather than growing the box past it, unlike a normal
+  // (non-Ultra) or "extra" region where the box is just the AI's own best guess and
+  // growing it to avoid clipping text is the right tradeoff.
+  lockGeometry?: boolean;
 }
 
 export interface PaintStroke {

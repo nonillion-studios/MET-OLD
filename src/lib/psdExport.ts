@@ -11,7 +11,7 @@
 import { writePsd, LayerTextData } from 'ag-psd';
 import Konva from 'konva';
 import { ProcessedImage, Region } from '../types';
-import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing } from '../utils/textUtils';
+import { calculateAutoFitFontSize, calculateAutoFitBox, wrapRtlLines, safeLetterSpacing, LOCKED_GEOMETRY_MIN_FONT_SIZE, LOCKED_GEOMETRY_MAX_GROWTH } from '../utils/textUtils';
 
 async function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -127,7 +127,8 @@ async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage
   if (region.autoFitText) {
     renderFontSize = calculateAutoFitFontSize(
       region.translatedText, region.width, region.height, region.fontFamily,
-      fontStyleStr, region.lineHeight || 1.2, letterSpacing, region.fontSize
+      fontStyleStr, region.lineHeight || 1.2, letterSpacing, region.fontSize,
+      region.lockGeometry ? LOCKED_GEOMETRY_MIN_FONT_SIZE : undefined
     );
   }
 
@@ -136,7 +137,8 @@ async function renderTextLayerCanvas(img: ProcessedImage, region: ProcessedImage
   const { renderWidth, renderHeight, xOffset, yOffset } = calculateAutoFitBox(
     region.translatedText, region.x, region.y, region.width, region.height,
     region.fontFamily, fontStyleStr, region.lineHeight || 1.2, letterSpacing,
-    renderFontSize, img.width, img.height
+    renderFontSize, img.width, img.height,
+    region.lockGeometry ? LOCKED_GEOMETRY_MAX_GROWTH : undefined
   );
 
   // Padding beyond the rotated bounding box to absorb stroke/shadow bleed at the edges.
@@ -240,14 +242,16 @@ function buildNativeTextLayerData(img: ProcessedImage, region: Region): LayerTex
   if (region.autoFitText) {
     renderFontSize = calculateAutoFitFontSize(
       region.translatedText, region.width, region.height, region.fontFamily,
-      fontStyleStr, region.lineHeight || 1.2, letterSpacing, region.fontSize
+      fontStyleStr, region.lineHeight || 1.2, letterSpacing, region.fontSize,
+      region.lockGeometry ? LOCKED_GEOMETRY_MIN_FONT_SIZE : undefined
     );
   }
 
   const { renderWidth, renderHeight, xOffset, yOffset } = calculateAutoFitBox(
     region.translatedText, region.x, region.y, region.width, region.height,
     region.fontFamily, fontStyleStr, region.lineHeight || 1.2, letterSpacing,
-    renderFontSize, img.width, img.height
+    renderFontSize, img.width, img.height,
+    region.lockGeometry ? LOCKED_GEOMETRY_MAX_GROWTH : undefined
   );
 
   // Same rotation convention as the Konva group in renderTextLayerCanvas: rotated around the
