@@ -11,7 +11,7 @@ import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
 import { detectPage, detectPageViaGradio, resolveBubblePolygon, pairBubbleAndTextDetections, DetectorDetection } from './lib/detector';
 import { translateUltraModePage, UltraRegionResult } from './lib/ultraTranslate';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
-import { mapRawRegionToPixels } from './utils/textUtils';
+import { mapRawRegionToPixels, applyOvalKashidaJustification, normalizeArabicPunctuation } from './utils/textUtils';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -167,6 +167,19 @@ export default function App() {
   });
 
   const [customFonts, setCustomFonts] = useState<string[]>([]);
+  // Global font overrides, applied after the AI's own per-region fontFamily choice. Empty
+  // string ('') means "let the AI decide" - the per-region dropdown still lets the user
+  // override an individual region regardless of this setting.
+  const [bubbleFontOverride, setBubbleFontOverride] = useState<string>(() => localStorage.getItem('manga_bubble_font_override') || '');
+  const [sfxFontOverride, setSfxFontOverride] = useState<string>(() => localStorage.getItem('manga_sfx_font_override') || '');
+  const handleSetBubbleFontOverride = (value: string) => {
+    setBubbleFontOverride(value);
+    localStorage.setItem('manga_bubble_font_override', value);
+  };
+  const handleSetSfxFontOverride = (value: string) => {
+    setSfxFontOverride(value);
+    localStorage.setItem('manga_sfx_font_override', value);
+  };
   const [showExternalAIModal, setShowExternalAIModal] = useState(false);
   const [externalAIPasteData, setExternalAIPasteData] = useState('');
   const fontInputRef = useRef<HTMLInputElement>(null);
@@ -595,7 +608,7 @@ export default function App() {
           id: 'region-' + Math.random().toString(36).substr(2, 9),
           type: raw.type || 'bubble',
           originalText: raw.originalText || '',
-          translatedText: raw.translatedText || '',
+          translatedText: normalizeArabicPunctuation(raw.translatedText || ''),
           x,
           y,
           width,
@@ -605,7 +618,7 @@ export default function App() {
           strokeColor: raw.strokeColor || 'transparent',
           strokeWidth: raw.strokeWidth ?? 0,
           bgColor: raw.bgColor && raw.bgColor !== 'transparent' ? raw.bgColor : (raw.type === 'sfx' ? 'transparent' : '#ffffff'),
-          fontFamily: raw.fontFamily || (raw.type === 'sfx' ? 'Aref Ruqaa' : 'Marhey'),
+          fontFamily: (raw.type === 'sfx' ? sfxFontOverride : bubbleFontOverride) || raw.fontFamily || (raw.type === 'sfx' ? 'Aref Ruqaa' : 'Marhey'),
           fontSize: raw.fontSize || Math.max(16, Math.floor(height / 4)),
           fontWeight: raw.fontWeight || 'normal',
           fontStyle: raw.fontStyle || 'normal',
@@ -831,104 +844,15 @@ export default function App() {
   // applyKashidaHarmony so it can also be invoked automatically after AI processing
   // without depending on selectedImageId/selectedRegionId.
   const computeOvalKashidaText = (region: Region): string | null => {
-    const originalText = region.translatedText || '';
-    const cleanText = originalText.replace(/ـ+/g, '');
-    if (!cleanText.trim()) return null;
-
     const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
-    const extendableArabicLetters = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
-    // لا (lam-alef) is a MANDATORY ligature in Arabic - the two letters must always render
-    // connected with no elongation between them. Inserting a kashida there (ل + ـ + ا)
-    // breaks the ligature into two visually disconnected letters, which is not just ugly
-    // but orthographically wrong - lam is technically "extendable" on its own, but never
-    // when directly followed by any alef form.
-    const alefForms = /[اأإآٱ]/;
-    const canInsertKashidaAfter = (word: string, charIdx: number) =>
-      extendableArabicLetters.test(word[charIdx]) && !(word[charIdx] === 'ل' && alefForms.test(word[charIdx + 1] || ''));
-
-    const measureNode = new Konva.Text({
-      fontFamily: region.fontFamily,
-      fontStyle: fontStyleStr,
-      fontSize: region.fontSize,
-      letterSpacing: region.letterSpacing || 0,
-    });
-    const measureWidth = (s: string) => {
-      measureNode.text(s);
-      return measureNode.width();
-    };
-
-    const paragraphs = cleanText.split('\n');
-    const lines: string[] = [];
-    for (const para of paragraphs) {
-      const words = para.split(/\s+/).filter(w => w.length > 0);
-      if (words.length === 0) {
-        lines.push('');
-        continue;
-      }
-      let currentLine = words[0];
-      for (let i = 1; i < words.length; i++) {
-        const candidate = currentLine + ' ' + words[i];
-        if (measureWidth(candidate) > region.width) {
-          lines.push(currentLine);
-          currentLine = words[i];
-        } else {
-          currentLine = candidate;
-        }
-      }
-      lines.push(currentLine);
-    }
-
-    // Only meaningful for multi-line wrapped text — skip empty/short single-word regions.
-    if (lines.length <= 1) {
-      measureNode.destroy();
-      return null;
-    }
-
-    const lineWidths = lines.map(l => measureWidth(l));
-    const maxLineWidth = Math.max(0, ...lineWidths);
-    const n = lines.length;
-    const lineTargets = n > 1
-      ? lines.map((_, i) => maxLineWidth * (0.65 + 0.35 * Math.sin(Math.PI * (i + 0.5) / n)))
-      : lineWidths.slice();
-
-    const justifiedLines = lines.map((line, idx) => {
-      if (!line) return line;
-      if (n <= 1) return line;
-      let width = lineWidths[idx];
-      const targetWidth = lineTargets[idx];
-      if (targetWidth <= 0 || width >= targetWidth * 0.95) return line;
-
-      const words = line.split(' ');
-      const insertCounts = new Array(words.length).fill(0);
-      const MAX_PER_WORD = 2;
-      let safety = 0;
-
-      while (width < targetWidth * 0.95 && safety < 200) {
-        safety++;
-        let insertedThisPass = false;
-
-        for (let w = 0; w < words.length && width < targetWidth * 0.95; w++) {
-          if (insertCounts[w] >= MAX_PER_WORD) continue;
-          const word = words[w];
-          for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
-            if (canInsertKashidaAfter(word, charIdx)) {
-              words[w] = word.slice(0, charIdx + 1) + 'ـــ' + word.slice(charIdx + 1);
-              insertCounts[w]++;
-              insertedThisPass = true;
-              width = measureWidth(words.join(' '));
-              break;
-            }
-          }
-        }
-
-        if (!insertedThisPass) break;
-      }
-
-      return words.join(' ');
-    });
-
-    measureNode.destroy();
-    return justifiedLines.join('\n');
+    return applyOvalKashidaJustification(
+      region.translatedText || '',
+      region.width,
+      region.fontFamily,
+      fontStyleStr,
+      region.fontSize,
+      region.letterSpacing || 0
+    );
   };
 
   // Pure computation: given an image's data URL and a set of regions (not necessarily
@@ -1041,104 +965,14 @@ export default function App() {
     let formatted = cleanText;
     if (style === 'oval') {
       const fontStyleStr = `${region.fontStyle === 'normal' ? '' : region.fontStyle} ${region.fontWeight === 'normal' ? '' : region.fontWeight}`.trim() || 'normal';
-      const extendableArabicLetters = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
-    // لا (lam-alef) is a MANDATORY ligature in Arabic - the two letters must always render
-    // connected with no elongation between them. Inserting a kashida there (ل + ـ + ا)
-    // breaks the ligature into two visually disconnected letters, which is not just ugly
-    // but orthographically wrong - lam is technically "extendable" on its own, but never
-    // when directly followed by any alef form.
-    const alefForms = /[اأإآٱ]/;
-    const canInsertKashidaAfter = (word: string, charIdx: number) =>
-      extendableArabicLetters.test(word[charIdx]) && !(word[charIdx] === 'ل' && alefForms.test(word[charIdx + 1] || ''));
-
-      // Throwaway single-line measurement node (no width constraint) to greedily pack
-      // words into visual lines the same way calculateAutoFitFontSize measures text.
-      const measureNode = new Konva.Text({
-        fontFamily: region.fontFamily,
-        fontStyle: fontStyleStr,
-        fontSize: region.fontSize,
-        letterSpacing: region.letterSpacing || 0,
-      });
-      const measureWidth = (s: string) => {
-        measureNode.text(s);
-        return measureNode.width();
-      };
-
-      // Greedy word-wrap: pack words per line, breaking when adding the next word
-      // would exceed the region's width.
-      const paragraphs = cleanText.split('\n');
-      const lines: string[] = [];
-      for (const para of paragraphs) {
-        const words = para.split(/\s+/).filter(w => w.length > 0);
-        if (words.length === 0) {
-          lines.push('');
-          continue;
-        }
-        let currentLine = words[0];
-        for (let i = 1; i < words.length; i++) {
-          const candidate = currentLine + ' ' + words[i];
-          if (measureWidth(candidate) > region.width) {
-            lines.push(currentLine);
-            currentLine = words[i];
-          } else {
-            currentLine = candidate;
-          }
-        }
-        lines.push(currentLine);
-      }
-
-      // Find the widest line's width as the profile's peak reference.
-      const lineWidths = lines.map(l => measureWidth(l));
-      const maxLineWidth = Math.max(0, ...lineWidths);
-      const n = lines.length;
-      // Per-line oval/lens target: first/last lines target ~65% of max width,
-      // middle lines approach the full width, tapering like an oval bubble.
-      const lineTargets = n > 1
-        ? lines.map((_, i) => maxLineWidth * (0.65 + 0.35 * Math.sin(Math.PI * (i + 0.5) / n)))
-        : lineWidths.slice();
-
-      const justifiedLines = lines.map((line, idx) => {
-        if (!line) return line;
-        if (n <= 1) return line;
-        let width = lineWidths[idx];
-        const targetWidth = lineTargets[idx];
-        // Only stretch lines meaningfully narrower than this line's own target.
-        if (targetWidth <= 0 || width >= targetWidth * 0.95) return line;
-
-        const words = line.split(' ');
-        const insertCounts = new Array(words.length).fill(0);
-        const MAX_PER_WORD = 2;
-        let safety = 0;
-
-        while (width < targetWidth * 0.95 && safety < 200) {
-          safety++;
-          let insertedThisPass = false;
-
-          for (let w = 0; w < words.length && width < targetWidth * 0.95; w++) {
-            if (insertCounts[w] >= MAX_PER_WORD) continue;
-            const word = words[w];
-            for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
-              if (canInsertKashidaAfter(word, charIdx)) {
-                // Never insert a tatweel between ل (lam) and a following alef-family
-                // letter (ا/أ/إ/آ) — لا/لأ/لإ/لآ are mandatory ligatures in Arabic.
-                if (word[charIdx] === 'ل' && /[اأإآ]/.test(word[charIdx + 1])) continue;
-                words[w] = word.slice(0, charIdx + 1) + 'ـــ' + word.slice(charIdx + 1);
-                insertCounts[w]++;
-                insertedThisPass = true;
-                width = measureWidth(words.join(' '));
-                break;
-              }
-            }
-          }
-
-          if (!insertedThisPass) break; // no more eligible letters anywhere in the line
-        }
-
-        return words.join(' ');
-      });
-
-      measureNode.destroy();
-      formatted = justifiedLines.join('\n');
+      formatted = applyOvalKashidaJustification(
+        cleanText,
+        region.width,
+        region.fontFamily,
+        fontStyleStr,
+        region.fontSize,
+        region.letterSpacing || 0
+      ) ?? cleanText;
     }
 
     if (style === 'oval') {
@@ -1818,7 +1652,7 @@ export default function App() {
           id: Math.random().toString(36).substr(2, 9),
           type: regionType,
           originalText: result.originalText,
-          translatedText: result.translatedText,
+          translatedText: normalizeArabicPunctuation(result.translatedText || ''),
           x: bounds.x,
           y: bounds.y,
           width: bounds.width,
@@ -1832,7 +1666,7 @@ export default function App() {
           // the detector's bubble/text/sfx classification is known to be unreliable (see
           // the "ultra typeset go sfx" investigation), so a fallback that keys off it
           // just reintroduces the same bug whenever the AI's own fontFamily is missing.
-          fontFamily: result.fontFamily || 'Marhey',
+          fontFamily: (regionType === 'sfx' ? sfxFontOverride : bubbleFontOverride) || result.fontFamily || 'Marhey',
           fontSize: Math.max(18, Math.floor(bounds.height / 3)),
           fontWeight: result.fontWeight || 'normal',
           fontStyle: result.fontStyle || 'normal',
@@ -1860,7 +1694,7 @@ export default function App() {
         id: Math.random().toString(36).substr(2, 9),
         type: regionType,
         originalText: result.originalText,
-        translatedText: result.translatedText,
+        translatedText: normalizeArabicPunctuation(result.translatedText || ''),
         x,
         y,
         width,
@@ -1870,7 +1704,7 @@ export default function App() {
         strokeColor: result.strokeColor || 'transparent',
         strokeWidth: result.strokeWidth ?? 0,
         bgColor: img.originalDataUrl ? 'transparent' : '#ffffff',
-        fontFamily: result.fontFamily || 'Marhey',
+        fontFamily: bubbleFontOverride || result.fontFamily || 'Marhey',
         fontSize: result.fontSize || Math.max(18, Math.floor(height / 3)),
         fontWeight: result.fontWeight || 'normal',
         fontStyle: result.fontStyle || 'normal',
@@ -1993,7 +1827,7 @@ export default function App() {
           id: Math.random().toString(36).substr(2, 9),
           type: raw.type,
           originalText: raw.originalText,
-          translatedText: raw.translatedText,
+          translatedText: normalizeArabicPunctuation(raw.translatedText || ''),
           x,
           y,
           width,
@@ -2003,7 +1837,7 @@ export default function App() {
           strokeColor: raw.strokeColor || 'transparent',
           strokeWidth: raw.strokeWidth ?? 0,
           bgColor: img.originalDataUrl ? 'transparent' : (raw.bgColor && raw.bgColor !== 'transparent' ? raw.bgColor : (raw.type === 'bubble' ? '#ffffff' : 'transparent')),
-          fontFamily: raw.fontFamily || (raw.type === 'bubble' ? 'Marhey' : 'Aref Ruqaa'),
+          fontFamily: (raw.type === 'bubble' ? bubbleFontOverride : sfxFontOverride) || raw.fontFamily || (raw.type === 'bubble' ? 'Marhey' : 'Aref Ruqaa'),
           fontSize: raw.fontSize || Math.max(16, Math.floor(height / 4)),
           fontWeight: raw.fontWeight || 'normal',
           fontStyle: raw.fontStyle || 'normal',
@@ -4285,6 +4119,48 @@ export default function App() {
                     <p className="text-[11px] text-slate-400 font-mono">
                       ✧ Unlike per-project Custom Agent Prompting, this guidance is always included in every request regardless of the selected AI provider.
                     </p>
+                  </div>
+
+                  {/* Global Font Overrides */}
+                  <div className="liquid-glass p-6 rounded-2xl border border-sky-500/15 space-y-4">
+                    <h3 className="text-base font-semibold text-white font-display">Default Fonts</h3>
+                    <p className="text-[11px] text-slate-400 font-mono">
+                      ✧ Forces this font on every newly processed region of that type instead of the AI's own choice. Leave on "Let AI decide" to keep the per-region AI suggestion. You can still override an individual region from its own font dropdown.
+                    </p>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-sky-300">Bubble Text Font</label>
+                        <select
+                          value={bubbleFontOverride}
+                          onChange={(e) => handleSetBubbleFontOverride(e.target.value)}
+                          className="w-full bg-black border border-[#444] rounded-md p-2 text-sm outline-none font-sans"
+                        >
+                          <option value="">Let AI decide</option>
+                          {customFonts.map(font => (
+                            <option key={font} value={font} style={{ fontFamily: font }}>{font.replace('MET-', '')} (uploaded) ✦</option>
+                          ))}
+                          {["Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "Almarai", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas"].map(font => (
+                            <option key={font} value={font} style={{ fontFamily: font }}>{font}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-sky-300">SFX / Outside-Bubble Font</label>
+                        <select
+                          value={sfxFontOverride}
+                          onChange={(e) => handleSetSfxFontOverride(e.target.value)}
+                          className="w-full bg-black border border-[#444] rounded-md p-2 text-sm outline-none font-sans"
+                        >
+                          <option value="">Let AI decide</option>
+                          {customFonts.map(font => (
+                            <option key={font} value={font} style={{ fontFamily: font }}>{font.replace('MET-', '')} (uploaded) ✦</option>
+                          ))}
+                          {["Cairo", "Tajawal", "Marhey", "Aref Ruqaa", "Almarai", "El Messiri", "Amiri", "Changa", "Harmattan", "Katibeh", "Lalezar", "Lemonada", "Mada", "Markazi Text", "Reem Kufi", "Rakkas"].map(font => (
+                            <option key={font} value={font} style={{ fontFamily: font }}>{font}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

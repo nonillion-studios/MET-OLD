@@ -50,6 +50,39 @@ export function wrapRtlLines(text: string): string {
   return text;
 }
 
+// Maps Latin/ASCII punctuation an AI translator commonly slips into Arabic output to its
+// Arabic typographic equivalent. Conservative - only remaps marks that have a clearly
+// "wrong looking" Arabic counterpart; '!', '.', and '…' are used as-is in Arabic too.
+const PUNCTUATION_MAP: Record<string, string> = {
+  ',': '،',
+  ';': '؛',
+  '?': '؟',
+};
+
+// Matches runs of neutral punctuation (Latin or Arabic) that the Unicode Bidi Algorithm
+// treats as direction-less and positions purely from surrounding strong-direction context.
+const PUNCTUATION_RUN = /[,;?.!…"'«»()\[\]\-–—:،؛؟]+/g;
+
+// Right-to-Left Mark (U+200F) - a zero-width character with strong RTL directionality but,
+// unlike FSI/PDI (see wrapRtlLines above), no isolate/embedding scope of its own. It nudges
+// the bidi algorithm to resolve an adjacent neutral run as RTL without creating a boundary
+// that can desync Konva's per-line word-wrap the way isolates did. This is the standard,
+// lower-impact fix for "leading/trailing punctuation flips to the wrong side" in bidi text
+// that isolate-wrapping (tried and reverted - see wrapRtlLines) was too blunt an instrument for.
+const RLM = '‏';
+
+// Normalizes punctuation in AI-translated Arabic text: remaps common Latin punctuation to
+// its Arabic equivalent, then brackets every punctuation run with RLM so it anchors to the
+// surrounding RTL text regardless of whether it sits at the start, middle, or end of a line.
+// No-op for text with no Arabic content (e.g. an all-English SFX word).
+export function normalizeArabicPunctuation(text: string): string {
+  if (!text) return text;
+  if (!/[؀-ۿ]/.test(text)) return text;
+
+  const remapped = text.replace(/[,;?]/g, (ch) => PUNCTUATION_MAP[ch] ?? ch);
+  return remapped.replace(PUNCTUATION_RUN, (run) => `${RLM}${run}${RLM}`);
+}
+
 // Reference size for comparing words' rendered widths - large enough that per-glyph
 // rounding differences between words don't flip which one is actually widest, and since
 // all words in the same font scale together, the widest-at-this-size word stays the
@@ -180,6 +213,127 @@ export function measureWrappedTextHeight(
   const height = node.height();
   node.destroy();
   return height;
+}
+
+// Arabic letters that can take a kashida (tatweel) extension when they connect to a
+// following letter. ة is deliberately excluded - it only ever appears in final position and
+// never connects to a letter after it, so a kashida there would be orthographically wrong.
+const EXTENDABLE_ARABIC_LETTERS = /[بتثجحخسشصضطظعغفقكلمنهيئ]/;
+const ALEF_FORMS = /[اأإآٱ]/;
+// Neutral punctuation/space the Unicode joining algorithm treats as non-connecting - a
+// kashida must never be inserted directly before one of these, since visually that reads
+// as "trailing" elongation even though the regex-matched letter isn't the word's last
+// character once attached punctuation (e.g. "يقول؟") is accounted for.
+const NON_CONNECTING_NEXT = /[\s.,;:!?؟،؛…"'«»()\[\]\-–—]/;
+
+// Can a kashida be inserted immediately after word[charIdx]? Requires: the letter itself is
+// extendable, it isn't a lam directly before an alef form (لا is a mandatory ligature - see
+// below), and the following character is itself a connecting letter rather than punctuation,
+// whitespace, or the true end of the word (a kashida must always sit BETWEEN two letters).
+function canInsertKashidaAfter(word: string, charIdx: number): boolean {
+  const ch = word[charIdx];
+  const next = word[charIdx + 1];
+  if (!EXTENDABLE_ARABIC_LETTERS.test(ch)) return false;
+  if (next === undefined || NON_CONNECTING_NEXT.test(next)) return false;
+  // لا (lam-alef) is a MANDATORY ligature - the two letters must always render connected
+  // with no elongation between them. Inserting a kashida there (ل + ـ + ا) breaks the
+  // ligature into two visually disconnected letters, which is orthographically wrong.
+  if (ch === 'ل' && ALEF_FORMS.test(next)) return false;
+  return true;
+}
+
+// Oval-gradient kashida justification: stretches wrapped lines of `text` so a multi-line
+// bubble reads as a roughly oval/circular block instead of ragged-width lines. Shared by
+// the auto (post-processing) and manual ("Line-extension kashida" button) code paths in
+// App.tsx, which used to each carry their own copy of this logic.
+export function applyOvalKashidaJustification(
+  text: string,
+  boxWidth: number,
+  fontFamily: string,
+  fontStyle: string,
+  fontSize: number,
+  letterSpacing: number
+): string | null {
+  const cleanText = (text || '').replace(/ـ+/g, '');
+  if (!cleanText.trim()) return null;
+
+  const measureNode = new Konva.Text({ fontFamily, fontStyle, fontSize, letterSpacing });
+  const measureWidth = (s: string) => {
+    measureNode.text(s);
+    return measureNode.width();
+  };
+
+  const paragraphs = cleanText.split('\n');
+  const lines: string[] = [];
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/).filter(w => w.length > 0);
+    if (words.length === 0) {
+      lines.push('');
+      continue;
+    }
+    let currentLine = words[0];
+    for (let i = 1; i < words.length; i++) {
+      const candidate = currentLine + ' ' + words[i];
+      if (measureWidth(candidate) > boxWidth) {
+        lines.push(currentLine);
+        currentLine = words[i];
+      } else {
+        currentLine = candidate;
+      }
+    }
+    lines.push(currentLine);
+  }
+
+  if (lines.length <= 1) {
+    measureNode.destroy();
+    return null;
+  }
+
+  const lineWidths = lines.map(l => measureWidth(l));
+  const maxLineWidth = Math.max(0, ...lineWidths);
+  const n = lines.length;
+  const lineTargets = lines.map((_, i) => maxLineWidth * (0.65 + 0.35 * Math.sin(Math.PI * (i + 0.5) / n)));
+
+  // Inserts one tatweel character per hit (not several at once) so the stretch grows
+  // gradually and never visibly overshoots the target width in one jump.
+  const MAX_PER_WORD = 4;
+
+  const justifiedLines = lines.map((line, idx) => {
+    if (!line) return line;
+    let width = lineWidths[idx];
+    const targetWidth = lineTargets[idx];
+    if (targetWidth <= 0 || width >= targetWidth * 0.95) return line;
+
+    const words = line.split(' ');
+    const insertCounts = new Array(words.length).fill(0);
+    let safety = 0;
+
+    while (width < targetWidth * 0.95 && safety < 200) {
+      safety++;
+      let insertedThisPass = false;
+
+      for (let w = 0; w < words.length && width < targetWidth * 0.95; w++) {
+        if (insertCounts[w] >= MAX_PER_WORD) continue;
+        const word = words[w];
+        for (let charIdx = 0; charIdx < word.length - 1; charIdx++) {
+          if (canInsertKashidaAfter(word, charIdx)) {
+            words[w] = word.slice(0, charIdx + 1) + 'ـ' + word.slice(charIdx + 1);
+            insertCounts[w]++;
+            insertedThisPass = true;
+            width = measureWidth(words.join(' '));
+            break;
+          }
+        }
+      }
+
+      if (!insertedThisPass) break;
+    }
+
+    return words.join(' ');
+  });
+
+  measureNode.destroy();
+  return justifiedLines.join('\n');
 }
 
 export interface AutoFitBox {
