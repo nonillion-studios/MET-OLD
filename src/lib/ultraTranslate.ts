@@ -16,6 +16,7 @@ export interface UltraNumberedRegionResult {
   // typesetting decision (font, weight, style, color, stroke, rotation, alignment, line
   // height) is the AI's own judgment, for every numbered region, exactly like the normal
   // (non-Ultra) detection mode. All optional since older prompts/parses may omit them.
+  textType?: "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx";
   angle?: number;
   textColor?: string;
   strokeColor?: string;
@@ -38,6 +39,7 @@ export interface UltraExtraRegionResult {
   extra: true;
   originalText: string;
   translatedText: string;
+  textType?: "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx";
   ymin: number;
   xmin: number;
   ymax: number;
@@ -92,8 +94,8 @@ export async function translateUltraModePage(opts: UltraTranslateOptions): Promi
     const schemaInstructions = `
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry. ALWAYS include every typesetting field listed below (angle, textColor, strokeColor, strokeWidth, fontFamily, fontWeight, fontStyle, textAlign, lineHeight) for EVERY entry, even ordinary calm dialogue - do not omit them just because the answer is a plain/default value (e.g. angle: 0, strokeColor: "transparent" are still real, deliberate answers you must write out):
 [
-  { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
-  { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
+  { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "textType": "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx", "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
+  { "extra": true, "originalText": string, "translatedText": string, "textType": "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx", "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
 ]`;
 
     const response = await fetchOllama(`${opts.ollamaEndpoint.replace(/\/$/, "")}/api/generate`, {
@@ -138,8 +140,8 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
     const schemaInstructions = `
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) matching EXACTLY this shape - each entry is EITHER a numbered-marker entry OR an "extra" (detector-missed) entry. ALWAYS include every typesetting field listed below (angle, textColor, strokeColor, strokeWidth, fontFamily, fontWeight, fontStyle, textAlign, lineHeight) for EVERY entry, even ordinary calm dialogue - do not omit them just because the answer is a plain/default value (e.g. angle: 0, strokeColor: "transparent" are still real, deliberate answers you must write out):
 [
-  { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
-  { "extra": true, "originalText": string, "translatedText": string, "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
+  { "region": number, "originalText": string, "translatedText": string, "skip": boolean (optional, true if this marker is not real text), "textType": "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx", "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number },
+  { "extra": true, "originalText": string, "translatedText": string, "textType": "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx", "ymin": number, "xmin": number, "ymax": number, "xmax": number, "angle": number, "textColor": string, "strokeColor": string, "strokeWidth": number, "fontFamily": string, "fontSize": number, "fontWeight": string, "fontStyle": string, "textAlign": string, "lineHeight": number }
 ]`;
 
     const request = buildOpenAICompatibleChatRequest(
@@ -199,6 +201,7 @@ IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no c
                   originalText: { type: Type.STRING },
                   translatedText: { type: Type.STRING },
                   skip: { type: Type.BOOLEAN },
+                  textType: { type: Type.STRING, description: "one of 'dialogue', 'shout', 'whisper', 'thought', 'narration', 'sfx'" },
                   fontFamily: { type: Type.STRING },
                   // "extra" (detector-missed) entries: geometry + typesetting fields.
                   // All optional here since Gemini's structured schema doesn't support

@@ -356,6 +356,70 @@ export function applyOvalKashidaJustification(
   return justifiedLines.join('\n');
 }
 
+interface OverlapBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// Pushes apart any regions whose boxes overlap (or sit closer than `padding`), iterating a
+// few passes since separating one pair can create/worsen an overlap with a third region.
+// Each colliding pair is nudged apart along whichever axis (x or y) has the SMALLER
+// penetration depth - the cheaper separation, and the one that best preserves the AI's
+// original reading-order layout instead of scattering bubbles randomly. Movement is
+// clamped to stay within the page. Meant as a last-resort safety net for bubbles the AI
+// detected with overlapping boxes (common on dense/cluttered panels), not a replacement
+// for correct detection - a small nudge, not a full re-layout.
+export function resolveRegionOverlaps<T extends OverlapBox>(
+  regions: T[],
+  pageWidth: number,
+  pageHeight: number,
+  padding = 6,
+  iterations = 12
+): T[] {
+  const boxes: OverlapBox[] = regions.map(r => ({ x: r.x, y: r.y, width: r.width, height: r.height }));
+
+  for (let pass = 0; pass < iterations; pass++) {
+    let movedAny = false;
+
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i];
+        const b = boxes[j];
+        const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+        const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+        // Only act when boxes truly overlap on BOTH axes (a real intersection) and the
+        // gap is under `padding` - two boxes merely close together side-by-side with no
+        // actual overlap should be left alone.
+        if (overlapX <= 0 || overlapY <= 0) continue;
+
+        movedAny = true;
+        if (overlapX < overlapY) {
+          const push = overlapX / 2 + padding / 2;
+          const dir = (a.x + a.width / 2) <= (b.x + b.width / 2) ? -1 : 1;
+          a.x += dir * push;
+          b.x -= dir * push;
+        } else {
+          const push = overlapY / 2 + padding / 2;
+          const dir = (a.y + a.height / 2) <= (b.y + b.height / 2) ? -1 : 1;
+          a.y += dir * push;
+          b.y -= dir * push;
+        }
+
+        a.x = Math.min(Math.max(a.x, 0), Math.max(0, pageWidth - a.width));
+        a.y = Math.min(Math.max(a.y, 0), Math.max(0, pageHeight - a.height));
+        b.x = Math.min(Math.max(b.x, 0), Math.max(0, pageWidth - b.width));
+        b.y = Math.min(Math.max(b.y, 0), Math.max(0, pageHeight - b.height));
+      }
+    }
+
+    if (!movedAny) break;
+  }
+
+  return regions.map((r, idx) => ({ ...r, x: boxes[idx].x, y: boxes[idx].y }));
+}
+
 export interface AutoFitBox {
   renderWidth: number;
   renderHeight: number;

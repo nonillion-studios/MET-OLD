@@ -37,6 +37,7 @@ export async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxAttempts =
 
 export interface RawRegion {
   type: "bubble" | "sfx";
+  textType?: "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx";
   originalText: string;
   translatedText: string;
   ymin: number;
@@ -204,6 +205,7 @@ export async function processMangaPages(pages: { id: string, base64Image: string
                 type: Type.OBJECT,
                 properties: {
                   type: { type: Type.STRING, description: "either 'bubble' or 'sfx'" },
+                  textType: { type: Type.STRING, description: "one of 'dialogue', 'shout', 'whisper', 'thought', 'narration', 'sfx'" },
                   originalText: { type: Type.STRING },
                   translatedText: { type: Type.STRING },
                   ymin: { type: Type.NUMBER, description: "0-1000" },

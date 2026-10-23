@@ -11,7 +11,7 @@ import { floodFillBubble, floodFillBubbleDetailed } from './lib/bubbleDetect';
 import { detectPage, detectPageViaGradio, resolveBubblePolygon, pairBubbleAndTextDetections, DetectorDetection } from './lib/detector';
 import { translateUltraModePage, UltraRegionResult } from './lib/ultraTranslate';
 import { ProcessedImage, Region, PaintStroke, MangaSeries, Volume, Chapter, Tool, AIProvider } from './types';
-import { mapRawRegionToPixels, applyOvalKashidaJustification, normalizeArabicPunctuation, hasArabicText } from './utils/textUtils';
+import { mapRawRegionToPixels, applyOvalKashidaJustification, normalizeArabicPunctuation, hasArabicText, resolveRegionOverlaps } from './utils/textUtils';
 import { get, set } from 'idb-keyval';
 import Swal from 'sweetalert2';
 import 'sweetalert2/dist/sweetalert2.min.css';
@@ -156,6 +156,13 @@ export default function App() {
   const [autoEnhanceAfterProcess, setAutoEnhanceAfterProcess] = useState<boolean>(() => {
     return localStorage.getItem('manga_auto_enhance_after_process') !== 'false';
   });
+  const [preventOverlappingText, setPreventOverlappingText] = useState<boolean>(() => {
+    return localStorage.getItem('manga_prevent_overlapping_text') !== 'false';
+  });
+  const handleSetPreventOverlappingText = (value: boolean) => {
+    setPreventOverlappingText(value);
+    localStorage.setItem('manga_prevent_overlapping_text', String(value));
+  };
   const [psdTightCrop, setPsdTightCrop] = useState<boolean>(() => {
     return localStorage.getItem('manga_psd_tight_crop') === 'true';
   });
@@ -607,6 +614,7 @@ export default function App() {
         return {
           id: 'region-' + Math.random().toString(36).substr(2, 9),
           type: raw.type || 'bubble',
+          textType: raw.textType,
           originalText: raw.originalText || '',
           translatedText: normalizeArabicPunctuation(raw.translatedText || ''),
           x,
@@ -1651,6 +1659,7 @@ export default function App() {
         const region: Region = {
           id: Math.random().toString(36).substr(2, 9),
           type: regionType,
+          textType: result.textType,
           originalText: result.originalText,
           translatedText: normalizeArabicPunctuation(result.translatedText || ''),
           x: bounds.x,
@@ -1693,6 +1702,7 @@ export default function App() {
       const region: Region = {
         id: Math.random().toString(36).substr(2, 9),
         type: regionType,
+        textType: result.textType,
         originalText: result.originalText,
         translatedText: normalizeArabicPunctuation(result.translatedText || ''),
         x,
@@ -1728,6 +1738,9 @@ export default function App() {
     if (autoEnhanceAfterProcess) {
       setProcessingStatusLog(`Applying kashida justification on ${img.filename}...`);
       finalRegions = applyKashidaToRegions(finalRegions);
+    }
+    if (preventOverlappingText) {
+      finalRegions = resolveRegionOverlaps(finalRegions, img.width, img.height);
     }
 
     if (skippedSlotCount > 0) {
@@ -1826,6 +1839,7 @@ export default function App() {
         return {
           id: Math.random().toString(36).substr(2, 9),
           type: raw.type,
+          textType: raw.textType,
           originalText: raw.originalText,
           translatedText: normalizeArabicPunctuation(raw.translatedText || ''),
           x,
@@ -1863,6 +1877,9 @@ export default function App() {
         finalRegions = enhanceResult.regions;
         notifyAutoCenterFailureIfNeeded(img.filename, enhanceResult.bubbleCount, enhanceResult.centeredCount);
       }
+      if (preventOverlappingText) {
+        finalRegions = resolveRegionOverlaps(finalRegions, img.width, img.height);
+      }
 
       setProcessingStatusLog(null);
       updateImage(img.id, { status: 'done', regions: finalRegions });
@@ -1870,6 +1887,31 @@ export default function App() {
       setProcessingStatusLog(null);
       updateImage(img.id, { status: 'error', error: error.message });
     }
+  };
+
+  // Wipes a page's existing translation/regions and re-runs processImage on it from
+  // scratch - for when a page came out badly (overlapping bubbles, wrong reading order,
+  // AI hallucination) and continuing to edit it region-by-region isn't worth it. Confirms
+  // first since it's destructive to whatever typesetting work already exists on the page.
+  const handleRetryPage = (imageId: string) => {
+    const img = imagesRef.current.find(i => i.id === imageId);
+    if (!img || img.status === 'processing') return;
+
+    Swal.fire({
+      icon: 'warning',
+      title: 'Retry this page?',
+      text: 'This clears the current translation and bubbles on this page, then re-processes it from scratch.',
+      showCancelButton: true,
+      confirmButtonText: 'Retry',
+      confirmButtonColor: '#b45309',
+      background: '#090615',
+      color: '#ffffff'
+    }).then((result) => {
+      if (!result.isConfirmed) return;
+      saveHistory(imageId);
+      updateImage(imageId, { regions: [], status: 'idle', error: undefined });
+      processImage({ ...img, regions: [], status: 'idle', error: undefined });
+    });
   };
 
   // Sequentially processes a queue of page ids, one at a time (no concurrency), reusing
@@ -3197,6 +3239,16 @@ export default function App() {
                           <Play size={14} /> <span className="hidden md:inline">Process Page</span>
                         </button>
                       )}
+                      {selectedImage.status === 'done' && (
+                        <button
+                          onClick={() => handleRetryPage(selectedImage.id)}
+                          disabled={processingQueueProgress !== null}
+                          className="flex items-center gap-1.5 bg-amber-700/80 hover:bg-amber-600 disabled:bg-amber-700/40 disabled:cursor-not-allowed px-2.5 sm:px-3 py-1.5 rounded text-xs font-medium transition-colors"
+                          title="Clear this page's translation and re-process it from scratch"
+                        >
+                          <Wand2 size={14} /> <span className="hidden md:inline">Retry Page</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -4246,6 +4298,19 @@ export default function App() {
                         <span className="flex flex-col">
                           <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Auto Center Bubbles + Kashida After Processing</span>
                           <span className="text-[10px] text-slate-500 mt-0.5">Automatically runs bubble-centering and Arabic kashida justification once the AI finishes a page.</span>
+                        </span>
+                      </label>
+
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={preventOverlappingText}
+                          onChange={(e) => handleSetPreventOverlappingText(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-sky-500/20 bg-black text-blue-600 focus:ring-sky-500"
+                        />
+                        <span className="flex flex-col">
+                          <span className="text-sm font-semibold text-slate-200 group-hover:text-sky-300 transition-colors">Prevent Overlapping Text Boxes</span>
+                          <span className="text-[10px] text-slate-500 mt-0.5">Nudges apart any two bubble/SFX boxes the AI detected overlapping each other, after processing a page.</span>
                         </span>
                       </label>
 

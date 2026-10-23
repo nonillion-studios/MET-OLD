@@ -5,6 +5,10 @@ export type AIProvider = 'gemini' | 'ollama' | 'openai_compatible';
 export interface Region {
   id: string;
   type: "bubble" | "sfx";
+  // The AI's finer-grained classification of this region (drives its font/stroke/size
+  // choices per the typesetting prompt rules) - optional since older saved projects and
+  // providers/prompts that predate this field won't have it.
+  textType?: "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx";
   originalText: string;
   translatedText: string;
   x: number;

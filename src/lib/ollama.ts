@@ -41,6 +41,7 @@ export async function processMangaPagesOllama(
 IMPORTANT: Respond with ONLY a raw JSON array (no markdown, no code fences, no commentary) of region objects for THIS single page, matching EXACTLY this shape for each item:
 {
   "type": "bubble" | "sfx",
+  "textType": "dialogue" | "shout" | "whisper" | "thought" | "narration" | "sfx",
   "originalText": string,
   "translatedText": string,
   "ymin": number, "xmin": number, "ymax": number, "xmax": number,
